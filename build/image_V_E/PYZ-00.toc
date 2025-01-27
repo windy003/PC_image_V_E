@@ -1,4 +1,4 @@
-('D:\\files\\projects\\test\\build\\image_V_E\\PYZ-00.pyz',
+('D:\\files\\projects\\PC_image_V_E\\build\\image_V_E\\PYZ-00.pyz',
  [('PIL',
    'C:\\Users\\windy\\.pyenv\\pyenv-win\\versions\\3.9.13\\lib\\site-packages\\PIL\\__init__.py',
    'PYMODULE'),

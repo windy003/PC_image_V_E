@@ -14,10 +14,10 @@ def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
     try:
         # PyInstaller 创建临时文件夹，将路径存储在 _MEIPASS 中
-        base_path = sys._MEIPASS
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     except Exception:
         # 如果不是打包环境，就使用当前路径
-        base_path = os.path.abspath(".")
+        base_path = os.path.dirname(os.path.abspath(__file__))
 
     return os.path.join(base_path, relative_path)
 
@@ -34,9 +34,12 @@ class ImageViewer(QMainWindow):
             self.setGeometry(100, 100, 800, 600)
 
             # 设置应用图标
-            icon_path = resource_path('icon.png')
+            icon_path = resource_path('icon.ico')
             if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
+                app_icon = QIcon(icon_path)
+                self.setWindowIcon(app_icon)
+                # 确保应用程序级别的图标也被设置
+                QApplication.setWindowIcon(app_icon)
             
             # 创建滚动区域
             self.scroll_area = QScrollArea(self)
@@ -512,9 +515,10 @@ if __name__ == '__main__':
         app = QApplication(sys.argv)
         
         # 设置应用程序图标
-        icon_path = resource_path('icon.png')
+        icon_path = resource_path('icon.ico')
         if os.path.exists(icon_path):
-            app.setWindowIcon(QIcon(icon_path))
+            app_icon = QIcon(icon_path)
+            app.setWindowIcon(app_icon)
         
         viewer = ImageViewer()
         viewer.show()
