@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 import traceback
 
-VERSION = "2025/1/26-00"
+VERSION = "2025/1/28-00"
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
@@ -92,6 +92,11 @@ class ImageViewer(QMainWindow):
         # 编辑菜单
         edit_menu = menubar.addMenu('编辑(&E)')
 
+        copy_action = QAction('复制(&C)', self)
+        copy_action.setShortcut('Ctrl+C')
+        copy_action.triggered.connect(self.copy_image)
+        edit_menu.addAction(copy_action)
+
         paste_action = QAction('粘贴(&V)', self)
         paste_action.setShortcut('Ctrl+V')
         paste_action.triggered.connect(self.paste_image)
@@ -147,6 +152,8 @@ class ImageViewer(QMainWindow):
             self.paste_image()
         elif event.key() == Qt.Key_Z and event.modifiers() == Qt.ControlModifier:
             self.undo()
+        elif event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
+            self.copy_image()
         else:
             super().keyPressEvent(event)
 
@@ -416,6 +423,21 @@ class ImageViewer(QMainWindow):
                     QMessageBox.information(self, '提示', '图片已从剪贴板粘贴')
         except Exception as e:
             QMessageBox.critical(self, '错误', f'粘贴图片失败: {str(e)}')
+            print(traceback.format_exc())
+
+    def copy_image(self):
+        try:
+            if self.image:
+                # 将PIL Image转换为QImage
+                data = self.image.convert("RGBA").tobytes("raw", "RGBA")
+                qimage = QImage(data, self.image.width, self.image.height, QImage.Format_RGBA8888)
+                
+                # 将QImage设置到剪贴板
+                clipboard = QApplication.clipboard()
+                clipboard.setImage(qimage)
+                QMessageBox.information(self, '提示', '图片已复制到剪贴板')
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'复制图片失败: {str(e)}')
             print(traceback.format_exc())
 
     def wheelEvent(self, event):
