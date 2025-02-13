@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 import traceback
 
-VERSION = "2025/1/28-00"
+VERSION = "2025/2/13-01"
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
@@ -477,15 +477,9 @@ class ImageViewer(QMainWindow):
                 qim = QImage(data, self.image.width, self.image.height, QImage.Format_RGBA8888)
                 self.pixmap = QPixmap.fromImage(qim)
                 
-                # 计算适应窗口的大小，保持原始比例
-                scroll_size = self.scroll_area.size()
-                scaled_pixmap = self.pixmap.scaled(scroll_size, 
-                                                 Qt.KeepAspectRatio, 
-                                                 Qt.SmoothTransformation)
-                
-                # 更新图片显示
-                self.image_label.setPixmap(scaled_pixmap)
-                self.image_label.resize(scaled_pixmap.size())
+                # 直接使用原始大小显示图片，不进行缩放
+                self.image_label.setPixmap(self.pixmap)
+                self.image_label.resize(self.pixmap.size())
                 
                 # 重置滚动条位置
                 self.scroll_area.horizontalScrollBar().setValue(0)
