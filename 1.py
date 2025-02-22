@@ -1,14 +1,39 @@
 import sys
 import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, 
-                            QLabel, QInputDialog, QMessageBox, QColorDialog, QScrollArea)
+                            QLabel, QInputDialog, QMessageBox, QColorDialog, QScrollArea, QLineEdit)
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QImage, QPen, QCursor, QIcon
 from PyQt5.QtCore import Qt, QPoint
 from PIL import Image, ImageDraw
 import numpy as np
 import traceback
+import logging
+import datetime
 
-VERSION = "2025/2/13-01"
+VERSION = "2025/2/22-01"
+
+def setup_logging():
+    try:
+        # 创建日志文件名，包含时间戳
+        log_filename = f'image_viewer_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+        
+        # 配置日志
+        logging.basicConfig(
+            filename=log_filename,
+            level=logging.DEBUG,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        
+        # 同时将日志输出到控制台
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        console_handler.setFormatter(formatter)
+        logging.getLogger('').addHandler(console_handler)
+        
+        logging.info("日志系统初始化成功")
+    except Exception as e:
+        print(f"设置日志系统失败: {str(e)}")
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
@@ -25,6 +50,7 @@ class ImageViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.last_save_path = ''  # 添加变量记录上次保存路径
+        self.color_label = None  # 添加颜色标签
         self.initUI()
 
     def initUI(self):
@@ -51,6 +77,24 @@ class ImageViewer(QMainWindow):
             self.image_label.setAlignment(Qt.AlignCenter)
             self.scroll_area.setWidget(self.image_label)
 
+            # 创建一个可选择的颜色标签
+            self.statusBar()
+            self.color_label = QLineEdit()
+            self.color_label.setReadOnly(True)  # 设置为只读
+            self.color_label.setStyleSheet("""
+                QLineEdit {
+                    border: none;
+                    background: transparent;
+                    color: black;
+                    font-size: 12pt;  /* 字体大小 */
+                    font-family: Arial;  /* 设置字体 */
+                    padding: 2px 10px;  /* 左右内边距 */
+                    min-width: 300px;  /* 最小宽度 */
+                }
+            """)
+            self.color_label.setText('颜色: #------ 坐标: (-,-)')
+            self.statusBar().addPermanentWidget(self.color_label, 1)  # 添加拉伸因子1
+            
             # 初始化变量
             self.image = None
             self.drawing = False
@@ -164,31 +208,51 @@ class ImageViewer(QMainWindow):
         """将窗口坐标转换为图像坐标"""
         try:
             if not self.image or not self.image_label.pixmap():
+                logging.debug("无效的图像或pixmap")
                 return None, None
 
             # 获取图像标签的几何信息
             label_rect = self.image_label.geometry()
             pixmap = self.image_label.pixmap()
             
-            # 计算图像在标签中的实际显示区域
-            scaled_size = pixmap.size()
-            scaled_size.scale(label_rect.size(), Qt.KeepAspectRatio)
+            if not pixmap:
+                logging.debug("无效的pixmap")
+                return None, None
+
+            # 获取图像标签的实际显示区域
+            label_width = label_rect.width()
+            label_height = label_rect.height()
             
-            # 计算图像的偏移量（居中显示）
-            x_offset = (label_rect.width() - scaled_size.width()) / 2
-            y_offset = (label_rect.height() - scaled_size.height()) / 2
+            # 获取图像的原始尺寸
+            image_width = self.image.width
+            image_height = self.image.height
             
-            # 将窗口坐标转换为图像坐标，考虑缩放因子
-            image_x = (pos.x() - x_offset) * self.image.width / (scaled_size.width() * self.scale_factor)
-            image_y = (pos.y() - y_offset) * self.image.height / (scaled_size.height() * self.scale_factor)
+            # 计算缩放后的图像尺寸
+            scaled_width = int(image_width * self.scale_factor)
+            scaled_height = int(image_height * self.scale_factor)
+            
+            # 计算图像在标签中的居中偏移
+            x_offset = (label_width - scaled_width) // 2
+            y_offset = (label_height - scaled_height) // 2
+            
+            # 计算相对于图像的点击位置
+            image_x = (pos.x() - x_offset) / self.scale_factor
+            image_y = (pos.y() - y_offset) / self.scale_factor
             
             # 确保坐标在图像范围内
-            image_x = max(0, min(image_x, self.image.width - 1))
-            image_y = max(0, min(image_y, self.image.height - 1))
+            image_x = max(0, min(int(image_x), image_width - 1))
+            image_y = max(0, min(int(image_y), image_height - 1))
             
-            return int(image_x), int(image_y)
+            logging.debug(f"坐标转换: 标签大小={label_width}x{label_height}, "
+                         f"图像大小={image_width}x{image_height}, "
+                         f"缩放比例={self.scale_factor}, "
+                         f"偏移量=({x_offset}, {y_offset}), "
+                         f"最终坐标=({image_x}, {image_y})")
+            
+            return image_x, image_y
+
         except Exception as e:
-            print(f"坐标转换错误: {str(e)}")
+            logging.error(f"坐标转换错误: {str(e)}", exc_info=True)
             return None, None
 
     def apply_blur_at_point(self, x, y):
@@ -224,39 +288,108 @@ class ImageViewer(QMainWindow):
 
     def mousePressEvent(self, event):
         try:
-            if event.button() == Qt.LeftButton and self.image:
-                if event.modifiers() == Qt.AltModifier:  # 按住Alt键进行平移
-                    self.panning = True
-                    self.last_pan_pos = event.pos()
-                    self.setCursor(Qt.ClosedHandCursor)
-                else:  # 正常的绘画操作
-                    self.drawing = True
-                    self.add_to_history()
-                    pos = self.image_label.mapFrom(self, event.pos())
-                    self.last_point = pos
-                    self.apply_effect(pos)
+            if event.button() == Qt.LeftButton:
+                pos = self.image_label.mapFrom(self, event.pos())
+                logging.debug(f"鼠标点击位置: {event.pos()}, 映射到标签位置: {pos}")
+                
+                # 只获取颜色信息
+                try:
+                    self.try_get_color(pos)
+                except Exception as e:
+                    logging.error(f"获取颜色失败: {str(e)}")
+                    self.color_label.setText('颜色: #------ 坐标: (-,-)')
+
         except Exception as e:
-            QMessageBox.critical(self, '错误', f'鼠标按下事件失败: {str(e)}')
-            print(traceback.format_exc())
+            logging.error(f"鼠标按下事件错误: {str(e)}", exc_info=True)
+
+    def try_get_color(self, pos):
+        """安全地尝试获取颜色信息"""
+        try:
+            if not self.image:
+                logging.debug("没有加载图像")
+                return
+            if not pos:
+                logging.debug("无效的位置信息")
+                return
+
+            logging.debug(f"开始获取颜色，位置: {pos.x()}, {pos.y()}")
+            
+            x, y = self.get_image_coordinates(pos)
+            if x is None or y is None:
+                logging.debug("无法获取有效的图像坐标")
+                return
+
+            # 确保坐标在图像范围内
+            if not (0 <= x < self.image.width and 0 <= y < self.image.height):
+                logging.debug(f"坐标超出范围: ({x}, {y}), 图像大小: {self.image.width}x{self.image.height}")
+                return
+
+            try:
+                # 从QPixmap获取颜色
+                if self.image_label.pixmap():
+                    qimage = self.image_label.pixmap().toImage()
+                    if qimage.valid(int(x), int(y)):
+                        color = QColor(qimage.pixel(int(x), int(y)))
+                        color_hex = '#{:02X}{:02X}{:02X}'.format(
+                            color.red(), color.green(), color.blue())
+                        self.color_label.setText(f'颜色: {color_hex} 坐标: ({x}, {y})')
+                        logging.debug(f"设置颜色标签: {color_hex}")
+                    else:
+                        logging.debug("无效的图像坐标")
+                        self.color_label.setText('颜色: #------ 坐标: (-,-)')
+                else:
+                    logging.debug("无效的pixmap")
+                    self.color_label.setText('颜色: #------ 坐标: (-,-)')
+
+            except Exception as e:
+                logging.error(f"获取或处理像素值失败: {str(e)}", exc_info=True)
+                self.color_label.setText('颜色: #------ 坐标: (-,-)')
+
+        except Exception as e:
+            logging.error(f"获取颜色过程出错: {str(e)}", exc_info=True)
+            self.color_label.setText('颜色: #------ 坐标: (-,-)')
 
     def mouseMoveEvent(self, event):
         try:
+            if not self.image:  # 首先检查是否有图像
+                return
+
             if self.panning and self.last_pan_pos:
-                # 计算移动距离
-                delta = event.pos() - self.last_pan_pos
-                # 更新滚动条位置
-                self.scroll_area.horizontalScrollBar().setValue(
-                    self.scroll_area.horizontalScrollBar().value() - delta.x())
-                self.scroll_area.verticalScrollBar().setValue(
-                    self.scroll_area.verticalScrollBar().value() - delta.y())
-                self.last_pan_pos = event.pos()
-            elif self.drawing and self.image:
-                pos = self.image_label.mapFrom(self, event.pos())
-                self.apply_effect(pos)
-                self.last_point = pos
+                try:
+                    # 计算移动距离
+                    delta = event.pos() - self.last_pan_pos
+                    # 更新滚动条位置
+                    hbar = self.scroll_area.horizontalScrollBar()
+                    vbar = self.scroll_area.verticalScrollBar()
+                    
+                    if hbar and vbar:  # 确保滚动条存在
+                        hbar.setValue(hbar.value() - delta.x())
+                        vbar.setValue(vbar.value() - delta.y())
+                    self.last_pan_pos = event.pos()
+                except Exception as e:
+                    print(f"平移操作错误: {str(e)}")
+                    self.panning = False
+                    self.last_pan_pos = None
+                
+            elif self.drawing:
+                try:
+                    pos = self.image_label.mapFrom(self, event.pos())
+                    if pos:  # 确保pos有效
+                        self.apply_effect(pos)
+                        self.last_point = pos
+                except Exception as e:
+                    print(f"绘画操作错误: {str(e)}")
+                    self.drawing = False
+                    self.last_point = None
+
         except Exception as e:
-            QMessageBox.critical(self, '错误', f'鼠标移动事件失败: {str(e)}')
-            print(traceback.format_exc())
+            print(f"鼠标移动事件错误: {str(e)}")
+            # 重置所有状态
+            self.drawing = False
+            self.panning = False
+            self.last_pan_pos = None
+            self.last_point = None
+            self.color_label.setText('颜色: #------ 坐标: (-,-)')
 
     def mouseReleaseEvent(self, event):
         try:
@@ -265,12 +398,17 @@ class ImageViewer(QMainWindow):
                     self.panning = False
                     self.last_pan_pos = None
                     self.setCursor(Qt.ArrowCursor)
-                else:
+                elif self.drawing:
                     self.drawing = False
+                    self.last_point = None
                     self.display_image()
         except Exception as e:
-            QMessageBox.critical(self, '错误', f'鼠标释放事件失败: {str(e)}')
-            print(traceback.format_exc())
+            print(f"鼠标释放事件错误: {str(e)}")
+            # 重置所有状态
+            self.drawing = False
+            self.panning = False
+            self.last_pan_pos = None
+            self.last_point = None
 
     def apply_effect(self, pos):
         try:
@@ -413,14 +551,19 @@ class ImageViewer(QMainWindow):
             if clipboard.mimeData().hasImage():
                 qimage = clipboard.image()
                 if not qimage.isNull():
-                    # 将QImage转换为PIL Image，确保使用正确的格式
+                    # 将QImage转换为正确的格式
+                    if qimage.format() != QImage.Format_RGBA8888:
+                        qimage = qimage.convertToFormat(QImage.Format_RGBA8888)
+                    
+                    # 获取图像数据
                     width = qimage.width()
                     height = qimage.height()
-                    ptr = qimage.bits()
+                    ptr = qimage.constBits()
                     ptr.setsize(height * width * 4)
                     arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
-                    # 确保创建一个新的图像副本
-                    self.image = Image.fromarray(arr.copy(), 'RGBA')
+                    
+                    # 使用正确的颜色通道顺序创建PIL图像
+                    self.image = Image.fromarray(arr, 'RGBA')
                     self.add_to_history()
                     self.display_image()
                     QMessageBox.information(self, '提示', '图片已从剪贴板粘贴')
@@ -506,6 +649,9 @@ class ImageViewer(QMainWindow):
 
 if __name__ == '__main__':
     try:
+        setup_logging()
+        logging.info("程序启动")
+        
         app = QApplication(sys.argv)
         
         # 设置应用程序图标
@@ -516,7 +662,11 @@ if __name__ == '__main__':
         
         viewer = ImageViewer()
         viewer.show()
-        sys.exit(app.exec_())
+        
+        exit_code = app.exec_()
+        logging.info(f"程序正常退出，退出码: {exit_code}")
+        sys.exit(exit_code)
     except Exception as e:
+        logging.critical(f"程序发生致命错误: {str(e)}", exc_info=True)
         print(f"程序发生错误: {str(e)}")
         print(traceback.format_exc())
