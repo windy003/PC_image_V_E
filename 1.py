@@ -7,9 +7,8 @@ from PyQt5.QtCore import Qt, QPoint, QTemporaryFile
 from PIL import Image, ImageDraw
 import numpy as np
 import traceback
-import logging
 
-VERSION = "2025/2/13-01"
+VERSION = "2025/3/3-02"
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
