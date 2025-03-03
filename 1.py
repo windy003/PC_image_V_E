@@ -3,10 +3,11 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, 
                             QLabel, QInputDialog, QMessageBox, QColorDialog, QScrollArea)
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QImage, QPen, QCursor, QIcon
-from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtCore import Qt, QPoint, QTemporaryFile
 from PIL import Image, ImageDraw
 import numpy as np
 import traceback
+import logging
 
 VERSION = "2025/2/13-01"
 
@@ -344,21 +345,29 @@ class ImageViewer(QMainWindow):
     def save_image(self):
         if self.image:
             try:
-                # 使用上次的保存路径作为打开对话框的默认路径
-                initial_path = self.last_save_path if self.last_save_path else ''
+                # 获取桌面路径
+                import os
+                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+                
+                # 如果有上次保存路径，优先使用上次路径
+                initial_path = self.last_save_path if hasattr(self, 'last_save_path') and self.last_save_path else os.path.join(desktop_path, "未命名.png")
+                
                 file_path, _ = QFileDialog.getSaveFileName(
                     self, 
                     '保存图片', 
-                    initial_path,  # 使用记住的路径
+                    initial_path,
                     'Images (*.png *.jpg *.jpeg *.bmp)'
                 )
                 
                 if file_path:
+                    # 保存图像
                     self.image.save(file_path)
-                    self.last_save_path = file_path  # 记住这次的保存路径
+                    # 记住这次的保存路径，以便下次使用
+                    self.last_save_path = file_path
                     QMessageBox.information(self, '提示', '图片保存成功')
             except Exception as e:
                 QMessageBox.critical(self, '错误', f'保存图片失败: {str(e)}')
+                import traceback
                 print(traceback.format_exc())
 
     def display_image(self):
@@ -410,22 +419,41 @@ class ImageViewer(QMainWindow):
     def paste_image(self):
         try:
             clipboard = QApplication.clipboard()
-            if clipboard.mimeData().hasImage():
-                qimage = clipboard.image()
-                if not qimage.isNull():
-                    # 将QImage转换为PIL Image，确保使用正确的格式
-                    width = qimage.width()
-                    height = qimage.height()
-                    ptr = qimage.bits()
-                    ptr.setsize(height * width * 4)
-                    arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
-                    # 确保创建一个新的图像副本
-                    self.image = Image.fromarray(arr.copy(), 'RGBA')
-                    self.add_to_history()
-                    self.display_image()
-                    QMessageBox.information(self, '提示', '图片已从剪贴板粘贴')
+            mime_data = clipboard.mimeData()
+            
+            if mime_data.hasImage():
+                # 从剪贴板获取QImage
+                q_image = clipboard.image()
+                
+                if q_image.isNull():
+                    QMessageBox.warning(self, "警告", "剪贴板中的图像无效")
+                    return
+                
+                # 使用更可靠的方法转换QImage到PIL Image
+                q_image = q_image.convertToFormat(QImage.Format_RGBA8888)
+                width, height = q_image.width(), q_image.height()
+                
+                # 获取图像数据
+                bits = q_image.constBits()
+                bits.setsize(q_image.byteCount())
+                
+                # 创建PIL图像
+                buffer = bytes(bits)
+                self.image = Image.frombuffer("RGBA", (width, height), buffer, "raw", "RGBA", 0, 1)
+                
+                # 重置缩放和历史
+                self.scale_factor = 1.0
+                self.history = []
+                self.history_index = -1
+                self.add_to_history()
+                
+                # 显示图像
+                self.display_image()
+            else:
+                QMessageBox.information(self, "提示", "剪贴板中没有图像")
         except Exception as e:
-            QMessageBox.critical(self, '错误', f'粘贴图片失败: {str(e)}')
+            QMessageBox.critical(self, "错误", f"粘贴图像时出错: {str(e)}")
+            import traceback
             print(traceback.format_exc())
 
     def copy_image(self):
