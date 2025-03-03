@@ -7,8 +7,10 @@ from PyQt5.QtCore import Qt, QPoint
 from PIL import Image, ImageDraw
 import numpy as np
 import traceback
+import logging
+import tempfile
 
-VERSION = "2025/2/13-01"
+VERSION = "2025/3/3-01"
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
@@ -410,23 +412,49 @@ class ImageViewer(QMainWindow):
     def paste_image(self):
         try:
             clipboard = QApplication.clipboard()
-            if clipboard.mimeData().hasImage():
-                qimage = clipboard.image()
-                if not qimage.isNull():
-                    # 将QImage转换为PIL Image，确保使用正确的格式
-                    width = qimage.width()
-                    height = qimage.height()
-                    ptr = qimage.bits()
-                    ptr.setsize(height * width * 4)
-                    arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
-                    # 确保创建一个新的图像副本
-                    self.image = Image.fromarray(arr.copy(), 'RGBA')
-                    self.add_to_history()
-                    self.display_image()
-                    QMessageBox.information(self, '提示', '图片已从剪贴板粘贴')
+            mime_data = clipboard.mimeData()
+            
+            if mime_data.hasImage():
+                # 从剪贴板获取QImage
+                q_image = clipboard.image()
+                
+                if q_image.isNull():
+                    QMessageBox.warning(self, "警告", "剪贴板中的图像无效")
+                    return
+                
+                # 将QImage转换为QPixmap，然后保存为临时文件
+                temp_path = os.path.join(tempfile.gettempdir(), "temp_clipboard_image.png")
+                pixmap = QPixmap.fromImage(q_image)
+                pixmap.save(temp_path, "PNG")
+                
+                # 使用PIL直接从文件加载，避免颜色通道转换问题
+                self.image = Image.open(temp_path)
+                
+                # 确保图像是RGBA模式
+                if self.image.mode != 'RGBA':
+                    self.image = self.image.convert('RGBA')
+                
+                # 重置缩放和历史
+                self.scale_factor = 1.0
+                self.history = []
+                self.history_index = -1
+                self.add_to_history()
+                
+                # 显示图像
+                self.display_image()
+                
+                # 删除临时文件
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+                
+                logging.info(f"从剪贴板粘贴了图像，尺寸: {self.image.width}x{self.image.height}，模式: {self.image.mode}")
+            else:
+                QMessageBox.information(self, "提示", "剪贴板中没有图像")
         except Exception as e:
-            QMessageBox.critical(self, '错误', f'粘贴图片失败: {str(e)}')
-            print(traceback.format_exc())
+            QMessageBox.critical(self, "错误", f"粘贴图像时出错: {str(e)}")
+            logging.error(f"粘贴图像时出错: {str(e)}", exc_info=True)
 
     def copy_image(self):
         try:
