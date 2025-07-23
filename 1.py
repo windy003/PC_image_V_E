@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 import traceback
 
-VERSION = "2025/3/3-02"
+VERSION = "2025/7/23-01"
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
@@ -22,10 +22,12 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 class ImageViewer(QMainWindow):
-    def __init__(self):
+    def __init__(self, image_path=None):
         super().__init__()
         self.last_save_path = ''  # 添加变量记录上次保存路径
         self.initUI()
+        if image_path:
+            self.load_image(image_path)
 
     def initUI(self):
         try:
@@ -34,7 +36,7 @@ class ImageViewer(QMainWindow):
             self.setGeometry(100, 100, 800, 600)
 
             # 设置应用图标
-            icon_path = resource_path('icon.ico')
+            icon_path = resource_path('1024x1024.png')
             if os.path.exists(icon_path):
                 app_icon = QIcon(icon_path)
                 self.setWindowIcon(app_icon)
@@ -63,7 +65,9 @@ class ImageViewer(QMainWindow):
             self.min_scale = 0.1  # 最小缩放比例
             self.max_scale = 5.0  # 最大缩放比例
             self.panning = False  # 添加平移状态标志
+            self.last_pan_pos = None  # 添加上一次平移位置
             self.grabGesture(Qt.PinchGesture)
+            self._pinch_start_scale_factor = 1.0
 
             # 创建菜单栏
             self.create_menus()
@@ -72,7 +76,6 @@ class ImageViewer(QMainWindow):
             self.history = []
             self.current_step = -1
 
-            self.showMaximized()
         except Exception as e:
             QMessageBox.critical(self, '错误', f'初始化失败: {str(e)}')
             print(traceback.format_exc())
@@ -479,14 +482,41 @@ class ImageViewer(QMainWindow):
         pinch = event.gesture(Qt.PinchGesture)
         if pinch:
             if pinch.state() == Qt.GestureStarted:
-                self.total_scale_factor_at_start = self.scale_factor
+                self._pinch_start_scale_factor = self.scale_factor
             elif pinch.state() == Qt.GestureUpdated:
-                new_scale = self.total_scale_factor_at_start * pinch.totalScaleFactor()
+                new_scale = self._pinch_start_scale_factor * pinch.totalScaleFactor()
                 if self.min_scale <= new_scale <= self.max_scale:
+                    # 获取手势中心点
+                    center_point = pinch.centerPoint().toPoint()
+                    # 转换为相对于 image_label 的坐标
+                    label_pos = self.image_label.mapFromGlobal(self.mapToGlobal(center_point))
+                    
+                    # 获取滚动条的当前位置
+                    h_bar = self.scroll_area.horizontalScrollBar()
+                    v_bar = self.scroll_area.verticalScrollBar()
+                    h_offset = h_bar.value()
+                    v_offset = v_bar.value()
+                    
+                    # 计算缩放前的鼠标在完整图片中的位置
+                    before_x = (h_offset + label_pos.x()) / self.scale_factor
+                    before_y = (v_offset + label_pos.y()) / self.scale_factor
+                    
+                    # 更新缩放因子
                     self.scale_factor = new_scale
                     self.display_image()
-            elif pinch.state() == Qt.GestureFinished:
-                pass
+                    
+                    # 计算缩放后的鼠标在完整图片中的位置
+                    after_x = before_x * self.scale_factor
+                    after_y = before_y * self.scale_factor
+                    
+                    # 计算新的滚动条位置，以保持鼠标下的点不变
+                    new_h_offset = after_x - label_pos.x()
+                    new_v_offset = after_y - label_pos.y()
+                    
+                    # 设置新的滚动条位置
+                    h_bar.setValue(int(new_h_offset))
+                    v_bar.setValue(int(new_v_offset))
+
             return True
         return False
 
@@ -546,18 +576,35 @@ class ImageViewer(QMainWindow):
             QMessageBox.critical(self, '错误', f'缩放图片失败: {str(e)}')
             print(traceback.format_exc())
 
+    def load_image(self, file_path):
+        try:
+            self.image = Image.open(file_path)
+            self.last_save_path = file_path
+            self.add_to_history()
+            self.display_image()
+            self.showMaximized()
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'打开图片失败: {str(e)}')
+            print(traceback.format_exc())
+
 if __name__ == '__main__':
     try:
         app = QApplication(sys.argv)
         
         # 设置应用程序图标
-        icon_path = resource_path('icon.ico')
+        icon_path = resource_path('1024x1024.png')
         if os.path.exists(icon_path):
             app_icon = QIcon(icon_path)
             app.setWindowIcon(app_icon)
         
-        viewer = ImageViewer()
-        viewer.show()
+        image_path = None
+        if len(sys.argv) > 1:
+            image_path = sys.argv[1]
+
+        viewer = ImageViewer(image_path=image_path)
+        if not image_path:
+            viewer.showMaximized()
+        
         sys.exit(app.exec_())
     except Exception as e:
         print(f"程序发生错误: {str(e)}")

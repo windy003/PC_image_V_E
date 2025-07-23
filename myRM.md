@@ -1,0 +1,1 @@
+pyinstaller --onefile --windowed --icon="1024x1024.png"     --add-data "1024x1024.png;."    --name "image_V_E"  1.py  
