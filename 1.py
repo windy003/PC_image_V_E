@@ -3,7 +3,7 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, 
                             QLabel, QInputDialog, QMessageBox, QColorDialog, QScrollArea)
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QImage, QPen, QCursor, QIcon
-from PyQt5.QtCore import Qt, QPoint, QTemporaryFile
+from PyQt5.QtCore import Qt, QPoint, QTemporaryFile, QEvent
 from PIL import Image, ImageDraw
 import numpy as np
 import traceback
@@ -63,7 +63,7 @@ class ImageViewer(QMainWindow):
             self.min_scale = 0.1  # 最小缩放比例
             self.max_scale = 5.0  # 最大缩放比例
             self.panning = False  # 添加平移状态标志
-            self.last_pan_pos = None  # 添加上一次平移位置
+            self.grabGesture(Qt.PinchGesture)
 
             # 创建菜单栏
             self.create_menus()
@@ -470,18 +470,33 @@ class ImageViewer(QMainWindow):
             QMessageBox.critical(self, '错误', f'复制图片失败: {str(e)}')
             print(traceback.format_exc())
 
+    def event(self, event):
+        if event.type() == QEvent.Gesture:
+            return self.gestureEvent(event)
+        return super(ImageViewer, self).event(event)
+
+    def gestureEvent(self, event):
+        pinch = event.gesture(Qt.PinchGesture)
+        if pinch:
+            if pinch.state() == Qt.GestureStarted:
+                self.total_scale_factor_at_start = self.scale_factor
+            elif pinch.state() == Qt.GestureUpdated:
+                new_scale = self.total_scale_factor_at_start * pinch.totalScaleFactor()
+                if self.min_scale <= new_scale <= self.max_scale:
+                    self.scale_factor = new_scale
+                    self.display_image()
+            elif pinch.state() == Qt.GestureFinished:
+                pass
+            return True
+        return False
+
     def wheelEvent(self, event):
         try:
             if self.image:
-                # 获取鼠标滚轮的delta值
-                delta = event.angleDelta().y()
-                
-                # 根据滚轮方向调整缩放
-                if delta > 0:
-                    self.zoom_in()
-                else:
-                    self.zoom_out()
-                
+                # 垂直滚动
+                self.scroll_area.verticalScrollBar().setValue(
+                    self.scroll_area.verticalScrollBar().value() - event.angleDelta().y()
+                )
                 event.accept()
         except Exception as e:
             QMessageBox.critical(self, '错误', f'鼠标滚轮事件失败: {str(e)}')
