@@ -1,9 +1,9 @@
 import sys
 import os
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog,
                             QLabel, QInputDialog, QMessageBox, QColorDialog, QScrollArea)
-from PyQt5.QtGui import QPixmap, QPainter, QColor, QImage, QPen, QCursor, QIcon
-from PyQt5.QtCore import Qt, QPoint, QTemporaryFile, QEvent
+from PyQt5.QtGui import QPixmap, QPainter, QColor, QImage, QPen, QCursor, QIcon, QFont
+from PyQt5.QtCore import Qt, QPoint, QTemporaryFile, QEvent, QTimer
 from PIL import Image, ImageDraw
 import numpy as np
 import traceback
@@ -76,6 +76,27 @@ class ImageViewer(QMainWindow):
             self.history = []
             self.current_step = -1
 
+            # 创建通知标签
+            self.notification_label = QLabel(self)
+            self.notification_label.setStyleSheet("""
+                QLabel {
+                    background-color: rgba(0, 0, 0, 200);
+                    color: white;
+                    padding: 15px 30px;
+                    border-radius: 8px;
+                    font-size: 20px;
+                    font-weight: bold;
+                }
+            """)
+            self.notification_label.setAlignment(Qt.AlignCenter)
+            self.notification_label.hide()
+
+            # 初始化当前图片路径
+            self.current_image_path = None
+
+            # 记录最后删除的文件路径，用于撤销删除
+            self.last_deleted_file = None
+
         except Exception as e:
             QMessageBox.critical(self, '错误', f'初始化失败: {str(e)}')
             print(traceback.format_exc())
@@ -110,7 +131,7 @@ class ImageViewer(QMainWindow):
 
         undo_action = QAction('撤销(&Z)', self)
         undo_action.setShortcut('Ctrl+Z')
-        undo_action.triggered.connect(self.undo)
+        undo_action.triggered.connect(self.handle_undo)
         edit_menu.addAction(undo_action)
 
         # 工具菜单
@@ -153,13 +174,189 @@ class ImageViewer(QMainWindow):
         reset_zoom_action.triggered.connect(self.reset_zoom)
         view_menu.addAction(reset_zoom_action)
 
+    def handle_undo(self):
+        """统一处理撤销操作"""
+        print(f"Debug: handle_undo called, last_deleted_file = {self.last_deleted_file}")
+        if self.last_deleted_file:
+            print("Debug: Calling undo_delete()")
+            self.undo_delete()
+        else:
+            print("Debug: Calling undo()")
+            self.undo()
+
+    def show_notification(self, message, duration=1500):
+        """显示一个临时通知，自动消失"""
+        self.notification_label.setText(message)
+
+        # 调整通知标签大小和位置
+        self.notification_label.adjustSize()
+        label_width = self.notification_label.width()
+        label_height = self.notification_label.height()
+        x = (self.width() - label_width) // 2
+        y = 50  # 距离顶部50像素
+        self.notification_label.setGeometry(x, y, label_width, label_height)
+
+        # 显示通知
+        self.notification_label.show()
+        self.notification_label.raise_()
+
+        # 设置定时器自动隐藏
+        QTimer.singleShot(duration, self.notification_label.hide)
+
+    def delete_current_image(self):
+        """删除当前显示的图片文件（移动到回收站）"""
+        try:
+            if not self.current_image_path:
+                self.show_notification("没有可删除的图片")
+                return
+
+            if not os.path.exists(self.current_image_path):
+                self.show_notification("图片文件不存在")
+                return
+
+            # 记录删除的文件路径
+            deleted_path = self.current_image_path
+            filename = os.path.basename(deleted_path)
+
+            # 创建临时备份文件（用于撤销）
+            import tempfile
+            import shutil
+            temp_dir = tempfile.gettempdir()
+            backup_path = os.path.join(temp_dir, f"image_backup_{filename}")
+
+            # 备份文件
+            shutil.copy2(deleted_path, backup_path)
+
+            # 使用 Windows Shell API 移动到回收站
+            import win32com.client
+            shell = win32com.client.Dispatch("Shell.Application")
+            namespace = shell.NameSpace(0)
+
+            # 规范化路径（解决 OneDrive 路径问题）
+            normalized_path = os.path.normpath(os.path.abspath(deleted_path))
+
+            # 使用 Shell 命令移动到回收站
+            item = namespace.ParseName(normalized_path)
+            if item:
+                item.InvokeVerb("delete")  # 移动到回收站
+
+                # 记录最后删除的文件，用于撤销
+                self.last_deleted_file = {
+                    'path': deleted_path,
+                    'filename': filename,
+                    'directory': os.path.dirname(deleted_path),
+                    'backup_path': backup_path
+                }
+
+                print(f"Debug: File deleted, last_deleted_file set to: {self.last_deleted_file}")
+                self.show_notification(f"已删除: {filename} (Ctrl+Z 可撤销)")
+
+                # 清空当前图片
+                self.image = None
+                self.current_image_path = None
+                self.image_label.clear()
+            else:
+                self.show_notification("无法访问该文件")
+                # 删除失败，清理备份文件
+                if os.path.exists(backup_path):
+                    os.remove(backup_path)
+
+        except Exception as e:
+            self.show_notification(f"删除失败: {str(e)}")
+            print(traceback.format_exc())
+
+    def undo_delete(self):
+        """撤销删除操作（从备份恢复）"""
+        try:
+            print(f"Debug: undo_delete called, last_deleted_file = {self.last_deleted_file}")
+
+            if not self.last_deleted_file:
+                self.show_notification("没有可撤销的删除操作")
+                return
+
+            deleted_info = self.last_deleted_file
+            deleted_path = deleted_info['path']
+            filename = deleted_info['filename']
+            backup_path = deleted_info['backup_path']
+
+            print(f"Debug: Attempting to restore from {backup_path} to {deleted_path}")
+
+            # 检查备份文件是否存在
+            if not os.path.exists(backup_path):
+                self.show_notification("备份文件不存在，无法恢复")
+                self.last_deleted_file = None
+                return
+
+            # 从备份恢复文件
+            import shutil
+            shutil.copy2(backup_path, deleted_path)
+            print(f"Debug: File restored successfully")
+
+            # 删除备份文件
+            os.remove(backup_path)
+
+            self.show_notification(f"已恢复: {filename}")
+
+            # 重新加载图片
+            self.load_image(deleted_path)
+
+            # 清除删除记录
+            self.last_deleted_file = None
+
+        except Exception as e:
+            self.show_notification(f"撤销失败: {str(e)}")
+            print(traceback.format_exc())
+
+    def copy_to_parent_directory(self):
+        """将当前图片复制到上层目录"""
+        try:
+            if not self.current_image_path:
+                self.show_notification("没有可复制的图片")
+                return
+
+            if not os.path.exists(self.current_image_path):
+                self.show_notification("图片文件不存在")
+                return
+
+            # 获取当前文件的目录和文件名
+            current_dir = os.path.dirname(self.current_image_path)
+            filename = os.path.basename(self.current_image_path)
+
+            # 获取上层目录
+            parent_dir = os.path.dirname(current_dir)
+
+            # 目标路径
+            destination = os.path.join(parent_dir, filename)
+
+            # 如果目标文件已存在，添加编号
+            if os.path.exists(destination):
+                name, ext = os.path.splitext(filename)
+                counter = 1
+                while os.path.exists(destination):
+                    new_filename = f"{name}_{counter}{ext}"
+                    destination = os.path.join(parent_dir, new_filename)
+                    counter += 1
+
+            # 复制文件
+            import shutil
+            shutil.copy2(self.current_image_path, destination)
+            self.show_notification(f"已复制到: {os.path.basename(destination)}")
+
+        except Exception as e:
+            self.show_notification(f"复制失败: {str(e)}")
+            print(traceback.format_exc())
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
             self.paste_image()
         elif event.key() == Qt.Key_Z and event.modifiers() == Qt.ControlModifier:
-            self.undo()
+            self.handle_undo()
         elif event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
             self.copy_image()
+        elif event.key() == Qt.Key_Delete:
+            self.delete_current_image()
+        elif event.key() == Qt.Key_M and event.modifiers() == Qt.ControlModifier:
+            self.copy_to_parent_directory()
         else:
             super().keyPressEvent(event)
 
@@ -329,15 +526,16 @@ class ImageViewer(QMainWindow):
             # 使用上次的保存路径作为打开对话框的默认路径
             initial_path = self.last_save_path if self.last_save_path else ''
             file_path, _ = QFileDialog.getOpenFileName(
-                self, 
-                '打开图片', 
+                self,
+                '打开图片',
                 initial_path,  # 使用记住的路径
                 'Images (*.png *.jpg *.jpeg *.bmp)'
             )
-            
+
             if file_path:
                 self.image = Image.open(file_path)
                 self.last_save_path = file_path  # 同时更新保存路径
+                self.current_image_path = file_path  # 设置当前图片路径
                 self.add_to_history()
                 self.display_image()
         except Exception as e:
@@ -580,6 +778,7 @@ class ImageViewer(QMainWindow):
         try:
             self.image = Image.open(file_path)
             self.last_save_path = file_path
+            self.current_image_path = file_path  # 设置当前图片路径
             self.add_to_history()
             self.display_image()
             self.showMaximized()
