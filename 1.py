@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 import traceback
 
-VERSION = "2025/7/23-01"
+VERSION = "2025/11/9-01"
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
@@ -53,6 +53,12 @@ class ImageViewer(QMainWindow):
             self.image_label.setAlignment(Qt.AlignCenter)
             self.scroll_area.setWidget(self.image_label)
 
+            # 设置焦点策略，确保窗口能接收键盘事件
+            self.setFocusPolicy(Qt.StrongFocus)
+
+            # 安装事件过滤器，拦截滚动区域的方向键事件
+            self.scroll_area.installEventFilter(self)
+
             # 初始化变量
             self.image = None
             self.drawing = False
@@ -96,6 +102,10 @@ class ImageViewer(QMainWindow):
 
             # 记录最后删除的文件路径，用于撤销删除
             self.last_deleted_file = None
+
+            # 当前目录的图片列表和索引
+            self.image_list = []
+            self.current_image_index = -1
 
         except Exception as e:
             QMessageBox.critical(self, '错误', f'初始化失败: {str(e)}')
@@ -255,6 +265,11 @@ class ImageViewer(QMainWindow):
                 self.image = None
                 self.current_image_path = None
                 self.image_label.clear()
+
+                # 从列表中移除已删除的图片
+                if deleted_path in self.image_list:
+                    self.image_list.remove(deleted_path)
+                    # 索引不需要更新，因为图片已清空
             else:
                 self.show_notification("无法访问该文件")
                 # 删除失败，清理备份文件
@@ -307,6 +322,113 @@ class ImageViewer(QMainWindow):
             self.show_notification(f"撤销失败: {str(e)}")
             print(traceback.format_exc())
 
+    def update_image_list(self):
+        """更新当前目录的图片列表"""
+        try:
+            if not self.current_image_path:
+                self.image_list = []
+                self.current_image_index = -1
+                return
+
+            # 规范化当前图片路径
+            current_normalized = os.path.normpath(os.path.abspath(self.current_image_path))
+
+            # 获取当前图片所在目录
+            directory = os.path.dirname(current_normalized)
+
+            # 支持的图片格式
+            image_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
+
+            # 获取目录中所有图片文件
+            all_files = []
+            for file in os.listdir(directory):
+                if file.lower().endswith(image_extensions):
+                    full_path = os.path.normpath(os.path.join(directory, file))
+                    all_files.append(full_path)
+
+            # 按文件名排序
+            all_files.sort()
+
+            self.image_list = all_files
+
+            # 找到当前图片的索引
+            try:
+                self.current_image_index = self.image_list.index(current_normalized)
+            except ValueError:
+                # 如果找不到，尝试比较文件名
+                current_filename = os.path.basename(current_normalized)
+                for i, path in enumerate(self.image_list):
+                    if os.path.basename(path) == current_filename:
+                        self.current_image_index = i
+                        break
+                else:
+                    self.current_image_index = -1
+
+            print(f"Debug: Found {len(self.image_list)} images, current index: {self.current_image_index}")
+            print(f"Debug: Current path: {current_normalized}")
+            if self.image_list:
+                print(f"Debug: First image in list: {self.image_list[0]}")
+
+        except Exception as e:
+            print(f"Error updating image list: {str(e)}")
+            print(traceback.format_exc())
+            self.image_list = []
+            self.current_image_index = -1
+
+    def show_previous_image(self):
+        """显示上一张图片"""
+        try:
+            if not self.image_list:
+                self.update_image_list()
+
+            if not self.image_list:
+                self.show_notification("当前目录没有其他图片")
+                return
+
+            if self.current_image_index <= 0:
+                self.show_notification("已经是第一张图片")
+                return
+
+            # 加载上一张图片
+            self.current_image_index -= 1
+            next_image_path = self.image_list[self.current_image_index]
+            self.load_image(next_image_path)
+
+            # 显示通知
+            filename = os.path.basename(next_image_path)
+            self.show_notification(f"← {filename} ({self.current_image_index + 1}/{len(self.image_list)})")
+
+        except Exception as e:
+            self.show_notification(f"切换图片失败: {str(e)}")
+            print(traceback.format_exc())
+
+    def show_next_image(self):
+        """显示下一张图片"""
+        try:
+            if not self.image_list:
+                self.update_image_list()
+
+            if not self.image_list:
+                self.show_notification("当前目录没有其他图片")
+                return
+
+            if self.current_image_index >= len(self.image_list) - 1:
+                self.show_notification("已经是最后一张图片")
+                return
+
+            # 加载下一张图片
+            self.current_image_index += 1
+            next_image_path = self.image_list[self.current_image_index]
+            self.load_image(next_image_path)
+
+            # 显示通知
+            filename = os.path.basename(next_image_path)
+            self.show_notification(f"→ {filename} ({self.current_image_index + 1}/{len(self.image_list)})")
+
+        except Exception as e:
+            self.show_notification(f"切换图片失败: {str(e)}")
+            print(traceback.format_exc())
+
     def copy_to_parent_directory(self):
         """将当前图片复制到上层目录"""
         try:
@@ -346,7 +468,23 @@ class ImageViewer(QMainWindow):
             self.show_notification(f"复制失败: {str(e)}")
             print(traceback.format_exc())
 
+    def eventFilter(self, obj, event):
+        """事件过滤器，拦截滚动区域的方向键事件"""
+        if obj == self.scroll_area and event.type() == QEvent.KeyPress:
+            key = event.key()
+            # 如果是方向键，转发到主窗口处理
+            if key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
+                print(f"Debug: Arrow key intercepted by event filter: {key}")
+                self.keyPressEvent(event)
+                return True  # 阻止事件继续传播
+        return super().eventFilter(obj, event)
+
     def keyPressEvent(self, event):
+        key = event.key()
+        print(f"Debug: Key pressed: {key}")
+        print(f"Debug: Qt.Key_Left = {Qt.Key_Left}, Qt.Key_Right = {Qt.Key_Right}")
+        print(f"Debug: Qt.Key_Up = {Qt.Key_Up}, Qt.Key_Down = {Qt.Key_Down}")
+
         if event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
             self.paste_image()
         elif event.key() == Qt.Key_Z and event.modifiers() == Qt.ControlModifier:
@@ -357,6 +495,12 @@ class ImageViewer(QMainWindow):
             self.delete_current_image()
         elif event.key() == Qt.Key_M and event.modifiers() == Qt.ControlModifier:
             self.copy_to_parent_directory()
+        elif event.key() in (Qt.Key_Left, Qt.Key_Up):
+            print("Debug: Left/Up arrow key detected, calling show_previous_image()")
+            self.show_previous_image()
+        elif event.key() in (Qt.Key_Right, Qt.Key_Down):
+            print("Debug: Right/Down arrow key detected, calling show_next_image()")
+            self.show_next_image()
         else:
             super().keyPressEvent(event)
 
@@ -538,6 +682,9 @@ class ImageViewer(QMainWindow):
                 self.current_image_path = file_path  # 设置当前图片路径
                 self.add_to_history()
                 self.display_image()
+
+                # 更新图片列表
+                self.update_image_list()
         except Exception as e:
             QMessageBox.critical(self, '错误', f'打开图片失败: {str(e)}')
             print(traceback.format_exc())
@@ -782,6 +929,9 @@ class ImageViewer(QMainWindow):
             self.add_to_history()
             self.display_image()
             self.showMaximized()
+
+            # 更新图片列表
+            self.update_image_list()
         except Exception as e:
             QMessageBox.critical(self, '错误', f'打开图片失败: {str(e)}')
             print(traceback.format_exc())
