@@ -9,7 +9,7 @@ import numpy as np
 import traceback
 import json
 
-VERSION = "2025/11/9-04"
+VERSION = "2025/11/9-06"
 
 class DraggableButton(QPushButton):
     """可拖动的按钮类"""
@@ -118,7 +118,11 @@ class ImageViewer(QMainWindow):
             self.touch_start_pos = None  # 触摸开始位置
             self.touch_current_pos = None  # 当前触摸位置
             self.is_touch_swipe = False  # 是否正在进行触摸滑动
-            self.swipe_threshold = 50  # 滑动阈值（像素）
+            self.is_touch_panning = False  # 是否正在进行触摸平移
+            self.swipe_threshold = 80  # 滑动切换阈值（像素）
+            self.is_in_touch_mode = False  # 是否处于触摸模式
+            self.touch_point_count = 0  # 当前触摸点数量
+            self.is_pinching = False  # 是否正在进行双指缩放
 
             # 启用触摸事件
             self.setAttribute(Qt.WA_AcceptTouchEvents, True)
@@ -215,6 +219,56 @@ class ImageViewer(QMainWindow):
             self.move_button.clicked.connect(self.copy_to_parent_directory)
             self.move_button.hide()
 
+            # 创建上一张按钮
+            self.prev_button = DraggableButton("◀\n上一张", self, button_id="prev")
+            self.prev_button.setFixedSize(120, 120)
+            self.prev_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(0, 122, 255, 220);
+                    color: white;
+                    border: 4px solid white;
+                    border-radius: 60px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    padding: 10px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(0, 122, 255, 255);
+                    border: 5px solid white;
+                }
+                QPushButton:pressed {
+                    background-color: rgba(0, 100, 220, 255);
+                    border: 4px solid rgba(255, 255, 255, 180);
+                }
+            """)
+            self.prev_button.clicked.connect(self.show_previous_image)
+            self.prev_button.hide()
+
+            # 创建下一张按钮
+            self.next_button = DraggableButton("▶\n下一张", self, button_id="next")
+            self.next_button.setFixedSize(120, 120)
+            self.next_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(0, 122, 255, 220);
+                    color: white;
+                    border: 4px solid white;
+                    border-radius: 60px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    padding: 10px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(0, 122, 255, 255);
+                    border: 5px solid white;
+                }
+                QPushButton:pressed {
+                    background-color: rgba(0, 100, 220, 255);
+                    border: 4px solid rgba(255, 255, 255, 180);
+                }
+            """)
+            self.next_button.clicked.connect(self.show_next_image)
+            self.next_button.hide()
+
             # 设置初始位置（从配置加载或使用默认位置）
             self.load_button_positions()
 
@@ -242,7 +296,7 @@ class ImageViewer(QMainWindow):
                         pos = button_positions['delete']
                         self.delete_button.move(pos['x'], pos['y'])
                     else:
-                        # 使用默认位置
+                        # 使用默认位置（右下角）
                         self.delete_button.move(self.width() - 140, self.height() - 140)
 
                     # 加载移动按钮位置
@@ -250,17 +304,37 @@ class ImageViewer(QMainWindow):
                         pos = button_positions['move']
                         self.move_button.move(pos['x'], pos['y'])
                     else:
-                        # 使用默认位置
+                        # 使用默认位置（删除按钮上方）
                         self.move_button.move(self.width() - 140, self.height() - 280)
+
+                    # 加载上一张按钮位置
+                    if 'prev' in button_positions:
+                        pos = button_positions['prev']
+                        self.prev_button.move(pos['x'], pos['y'])
+                    else:
+                        # 使用默认位置（左侧中间）
+                        self.prev_button.move(20, self.height() // 2 - 60)
+
+                    # 加载下一张按钮位置
+                    if 'next' in button_positions:
+                        pos = button_positions['next']
+                        self.next_button.move(pos['x'], pos['y'])
+                    else:
+                        # 使用默认位置（右侧中间）
+                        self.next_button.move(self.width() - 140, self.height() // 2 - 60)
             else:
                 # 配置文件不存在，使用默认位置
                 self.delete_button.move(self.width() - 140, self.height() - 140)
                 self.move_button.move(self.width() - 140, self.height() - 280)
+                self.prev_button.move(20, self.height() // 2 - 60)
+                self.next_button.move(self.width() - 140, self.height() // 2 - 60)
         except Exception as e:
             print(f'加载按钮位置失败: {str(e)}')
             # 出错时使用默认位置
             self.delete_button.move(self.width() - 140, self.height() - 140)
             self.move_button.move(self.width() - 140, self.height() - 280)
+            self.prev_button.move(20, self.height() // 2 - 60)
+            self.next_button.move(self.width() - 140, self.height() // 2 - 60)
 
     def save_button_positions(self):
         """保存按钮位置到配置文件"""
@@ -283,6 +357,14 @@ class ImageViewer(QMainWindow):
                 'x': self.move_button.x(),
                 'y': self.move_button.y()
             }
+            button_positions['prev'] = {
+                'x': self.prev_button.x(),
+                'y': self.prev_button.y()
+            }
+            button_positions['next'] = {
+                'x': self.next_button.x(),
+                'y': self.next_button.y()
+            }
 
             config['button_positions'] = button_positions
 
@@ -302,6 +384,10 @@ class ImageViewer(QMainWindow):
                 self.delete_button.raise_()
                 self.move_button.show()
                 self.move_button.raise_()
+                self.prev_button.show()
+                self.prev_button.raise_()
+                self.next_button.show()
+                self.next_button.raise_()
         except Exception as e:
             print(f'显示触屏按钮失败: {str(e)}')
 
@@ -310,6 +396,8 @@ class ImageViewer(QMainWindow):
         try:
             self.delete_button.hide()
             self.move_button.hide()
+            self.prev_button.hide()
+            self.next_button.hide()
         except Exception as e:
             print(f'隐藏触屏按钮失败: {str(e)}')
 
@@ -771,8 +859,8 @@ class ImageViewer(QMainWindow):
     def mousePressEvent(self, event):
         try:
             if event.button() == Qt.LeftButton and self.image:
-                # 如果是触摸滑动，不触发涂鸦
-                if self.is_touch_swipe:
+                # 如果处于触摸模式，不触发涂鸦，完全禁用
+                if self.is_in_touch_mode:
                     return
 
                 if event.modifiers() == Qt.AltModifier:  # 按住Alt键进行平移
@@ -791,8 +879,8 @@ class ImageViewer(QMainWindow):
 
     def mouseMoveEvent(self, event):
         try:
-            # 如果是触摸滑动，不触发涂鸦
-            if self.is_touch_swipe:
+            # 如果处于触摸模式，不触发涂鸦
+            if self.is_in_touch_mode:
                 return
 
             if self.panning and self.last_pan_pos:
@@ -815,8 +903,8 @@ class ImageViewer(QMainWindow):
     def mouseReleaseEvent(self, event):
         try:
             if event.button() == Qt.LeftButton:
-                # 如果是触摸滑动，不触发涂鸦
-                if self.is_touch_swipe:
+                # 如果处于触摸模式，不触发涂鸦
+                if self.is_in_touch_mode:
                     return
 
                 if self.panning:
@@ -1052,39 +1140,46 @@ class ImageViewer(QMainWindow):
         if pinch:
             if pinch.state() == Qt.GestureStarted:
                 self._pinch_start_scale_factor = self.scale_factor
+                self.is_pinching = True
+                self.is_in_touch_mode = True  # 进入触摸模式
             elif pinch.state() == Qt.GestureUpdated:
+                self.is_pinching = True
                 new_scale = self._pinch_start_scale_factor * pinch.totalScaleFactor()
                 if self.min_scale <= new_scale <= self.max_scale:
                     # 获取手势中心点
                     center_point = pinch.centerPoint().toPoint()
                     # 转换为相对于 image_label 的坐标
                     label_pos = self.image_label.mapFromGlobal(self.mapToGlobal(center_point))
-                    
+
                     # 获取滚动条的当前位置
                     h_bar = self.scroll_area.horizontalScrollBar()
                     v_bar = self.scroll_area.verticalScrollBar()
                     h_offset = h_bar.value()
                     v_offset = v_bar.value()
-                    
+
                     # 计算缩放前的鼠标在完整图片中的位置
                     before_x = (h_offset + label_pos.x()) / self.scale_factor
                     before_y = (v_offset + label_pos.y()) / self.scale_factor
-                    
+
                     # 更新缩放因子
                     self.scale_factor = new_scale
                     self.display_image()
-                    
+
                     # 计算缩放后的鼠标在完整图片中的位置
                     after_x = before_x * self.scale_factor
                     after_y = before_y * self.scale_factor
-                    
+
                     # 计算新的滚动条位置，以保持鼠标下的点不变
                     new_h_offset = after_x - label_pos.x()
                     new_v_offset = after_y - label_pos.y()
-                    
+
                     # 设置新的滚动条位置
                     h_bar.setValue(int(new_h_offset))
                     v_bar.setValue(int(new_v_offset))
+            elif pinch.state() == Qt.GestureFinished or pinch.state() == Qt.GestureCanceled:
+                self.is_pinching = False
+                # 延迟退出触摸模式
+                QTimer.singleShot(100, self.exit_touch_mode)
 
             return True
         return False
@@ -1093,11 +1188,17 @@ class ImageViewer(QMainWindow):
         """处理触摸开始事件"""
         try:
             touch_points = event.touchPoints()
+            self.touch_point_count = len(touch_points)
+
+            # 进入触摸模式
+            self.is_in_touch_mode = True
+
             if len(touch_points) == 1:  # 单指触摸
                 point = touch_points[0]
                 self.touch_start_pos = point.pos()
                 self.touch_current_pos = point.pos()
                 self.is_touch_swipe = False
+                self.is_touch_panning = False
 
                 # 显示触屏按钮
                 self.show_touch_buttons()
@@ -1112,19 +1213,50 @@ class ImageViewer(QMainWindow):
         """处理触摸更新事件"""
         try:
             touch_points = event.touchPoints()
-            if len(touch_points) == 1 and self.touch_start_pos:  # 单指滑动
+            self.touch_point_count = len(touch_points)
+
+            # 如果正在双指缩放，不处理单指平移
+            if self.is_pinching or len(touch_points) > 1:
+                return True
+
+            if len(touch_points) == 1 and self.touch_start_pos:  # 单指操作
                 point = touch_points[0]
+                prev_pos = self.touch_current_pos if self.touch_current_pos else self.touch_start_pos
                 self.touch_current_pos = point.pos()
 
-                # 计算滑动距离
-                dx = self.touch_current_pos.x() - self.touch_start_pos.x()
-                dy = self.touch_current_pos.y() - self.touch_start_pos.y()
+                # 计算从起始点的总距离
+                dx_total = self.touch_current_pos.x() - self.touch_start_pos.x()
+                dy_total = self.touch_current_pos.y() - self.touch_start_pos.y()
 
-                # 判断是否为水平滑动（水平距离大于垂直距离）
-                if abs(dx) > abs(dy) and abs(dx) > 10:
-                    self.is_touch_swipe = True
-                    event.accept()
-                    return True
+                # 计算本次移动的增量
+                dx_delta = self.touch_current_pos.x() - prev_pos.x()
+                dy_delta = self.touch_current_pos.y() - prev_pos.y()
+
+                # 判断是否应该进行平移
+                # 如果还没有确定操作类型，先判断用户意图
+                if not self.is_touch_swipe and not self.is_touch_panning:
+                    # 移动距离足够大才判断意图
+                    if abs(dx_total) > 15 or abs(dy_total) > 15:
+                        # 如果主要是水平移动，标记为可能的滑动
+                        if abs(dx_total) > abs(dy_total) * 1.5:
+                            # 暂时不确定，继续观察
+                            pass
+                        else:
+                            # 主要是垂直或斜向移动，确定为平移
+                            self.is_touch_panning = True
+
+                # 如果已确定为平移，或者用户正在移动
+                if self.is_touch_panning or (abs(dx_delta) > 0 or abs(dy_delta) > 0):
+                    if not self.is_touch_swipe:  # 如果不是滑动模式，就进行平移
+                        self.is_touch_panning = True
+                        # 更新滚动条位置（平移）
+                        h_bar = self.scroll_area.horizontalScrollBar()
+                        v_bar = self.scroll_area.verticalScrollBar()
+                        h_bar.setValue(int(h_bar.value() - dx_delta))
+                        v_bar.setValue(int(v_bar.value() - dy_delta))
+
+                event.accept()
+                return True
         except Exception as e:
             print(f'触摸更新事件失败: {str(e)}')
         return False
@@ -1132,13 +1264,18 @@ class ImageViewer(QMainWindow):
     def touchEndEvent(self, event):
         """处理触摸结束事件"""
         try:
-            if self.is_touch_swipe and self.touch_start_pos and self.touch_current_pos:
-                # 计算滑动距离
+            # 检查是否应该触发滑动切换图片
+            if self.touch_start_pos and self.touch_current_pos:
+                # 计算总滑动距离
                 dx = self.touch_current_pos.x() - self.touch_start_pos.x()
                 dy = self.touch_current_pos.y() - self.touch_start_pos.y()
 
-                # 如果水平滑动距离超过阈值，且主要是水平方向
-                if abs(dx) > self.swipe_threshold and abs(dx) > abs(dy):
+                # 判断是否为快速水平滑动（切换图片）
+                # 条件：水平距离超过阈值，且主要是水平方向，且没有被标记为平移
+                if (abs(dx) > self.swipe_threshold and
+                    abs(dx) > abs(dy) * 1.5 and
+                    not self.is_touch_panning):
+
                     if dx > 0:
                         # 向右滑动，显示上一张
                         self.show_previous_image()
@@ -1146,20 +1283,24 @@ class ImageViewer(QMainWindow):
                         # 向左滑动，显示下一张
                         self.show_next_image()
 
-                    # 重置状态
-                    self.touch_start_pos = None
-                    self.touch_current_pos = None
-                    self.is_touch_swipe = False
-                    event.accept()
-                    return True
-
-            # 重置状态
+            # 重置所有触摸状态
             self.touch_start_pos = None
             self.touch_current_pos = None
             self.is_touch_swipe = False
+            self.is_touch_panning = False
+
+            # 延迟退出触摸模式，避免触发鼠标事件
+            QTimer.singleShot(100, self.exit_touch_mode)
+
+            event.accept()
+            return True
         except Exception as e:
             print(f'触摸结束事件失败: {str(e)}')
         return False
+
+    def exit_touch_mode(self):
+        """退出触摸模式"""
+        self.is_in_touch_mode = False
 
     def wheelEvent(self, event):
         try:
