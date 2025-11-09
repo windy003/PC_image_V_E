@@ -1,14 +1,53 @@
 import sys
 import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog,
-                            QLabel, QInputDialog, QMessageBox, QColorDialog, QScrollArea)
+                            QLabel, QInputDialog, QMessageBox, QColorDialog, QScrollArea, QPushButton)
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QImage, QPen, QCursor, QIcon, QFont
 from PyQt5.QtCore import Qt, QPoint, QTemporaryFile, QEvent, QTimer
 from PIL import Image, ImageDraw
 import numpy as np
 import traceback
+import json
 
-VERSION = "2025/11/9-01"
+VERSION = "2025/11/9-04"
+
+class DraggableButton(QPushButton):
+    """可拖动的按钮类"""
+    def __init__(self, text, parent=None, button_id=None):
+        super().__init__(text, parent)
+        self.dragging = False
+        self.drag_position = QPoint()
+        self.press_pos = QPoint()
+        self.button_id = button_id  # 按钮标识符，用于保存位置
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.dragging = False
+            self.press_pos = event.globalPos()
+            self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton:
+            # 如果移动距离超过10像素，认为是拖动
+            if (event.globalPos() - self.press_pos).manhattanLength() > 10:
+                self.dragging = True
+                self.move(event.globalPos() - self.drag_position)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            was_dragging = self.dragging
+            # 如果没有拖动，触发点击事件
+            if not self.dragging:
+                self.click()
+            self.dragging = False
+
+            # 如果进行了拖动，通知父窗口保存位置
+            if was_dragging and self.parent():
+                if hasattr(self.parent(), 'save_button_positions'):
+                    self.parent().save_button_positions()
+            event.accept()
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
@@ -75,6 +114,15 @@ class ImageViewer(QMainWindow):
             self.grabGesture(Qt.PinchGesture)
             self._pinch_start_scale_factor = 1.0
 
+            # 触摸滑动相关变量
+            self.touch_start_pos = None  # 触摸开始位置
+            self.touch_current_pos = None  # 当前触摸位置
+            self.is_touch_swipe = False  # 是否正在进行触摸滑动
+            self.swipe_threshold = 50  # 滑动阈值（像素）
+
+            # 启用触摸事件
+            self.setAttribute(Qt.WA_AcceptTouchEvents, True)
+
             # 创建菜单栏
             self.create_menus()
             
@@ -107,9 +155,163 @@ class ImageViewer(QMainWindow):
             self.image_list = []
             self.current_image_index = -1
 
+            # 创建触屏操作按钮
+            self.create_touch_buttons()
+
         except Exception as e:
             QMessageBox.critical(self, '错误', f'初始化失败: {str(e)}')
             print(traceback.format_exc())
+
+    def create_touch_buttons(self):
+        """创建触屏操作按钮"""
+        try:
+            # 创建删除按钮
+            self.delete_button = DraggableButton("🗑️\n删除", self, button_id="delete")
+            self.delete_button.setFixedSize(120, 120)
+            self.delete_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 59, 48, 220);
+                    color: white;
+                    border: 4px solid white;
+                    border-radius: 60px;
+                    font-size: 18px;
+                    font-weight: bold;
+                    padding: 10px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 59, 48, 255);
+                    border: 5px solid white;
+                }
+                QPushButton:pressed {
+                    background-color: rgba(200, 40, 30, 255);
+                    border: 4px solid rgba(255, 255, 255, 180);
+                }
+            """)
+            self.delete_button.clicked.connect(self.delete_current_image)
+            self.delete_button.hide()
+
+            # 创建移动到上层目录按钮
+            self.move_button = DraggableButton("📤\n上层", self, button_id="move")
+            self.move_button.setFixedSize(120, 120)
+            self.move_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(52, 199, 89, 220);
+                    color: white;
+                    border: 4px solid white;
+                    border-radius: 60px;
+                    font-size: 18px;
+                    font-weight: bold;
+                    padding: 10px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(52, 199, 89, 255);
+                    border: 5px solid white;
+                }
+                QPushButton:pressed {
+                    background-color: rgba(40, 160, 70, 255);
+                    border: 4px solid rgba(255, 255, 255, 180);
+                }
+            """)
+            self.move_button.clicked.connect(self.copy_to_parent_directory)
+            self.move_button.hide()
+
+            # 设置初始位置（从配置加载或使用默认位置）
+            self.load_button_positions()
+
+        except Exception as e:
+            print(f'创建触屏按钮失败: {str(e)}')
+            print(traceback.format_exc())
+
+    def get_config_file_path(self):
+        """获取配置文件路径"""
+        config_dir = os.path.expanduser("~")
+        config_file = os.path.join(config_dir, ".image_viewer_config.json")
+        return config_file
+
+    def load_button_positions(self):
+        """从配置文件加载按钮位置"""
+        try:
+            config_file = self.get_config_file_path()
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    button_positions = config.get('button_positions', {})
+
+                    # 加载删除按钮位置
+                    if 'delete' in button_positions:
+                        pos = button_positions['delete']
+                        self.delete_button.move(pos['x'], pos['y'])
+                    else:
+                        # 使用默认位置
+                        self.delete_button.move(self.width() - 140, self.height() - 140)
+
+                    # 加载移动按钮位置
+                    if 'move' in button_positions:
+                        pos = button_positions['move']
+                        self.move_button.move(pos['x'], pos['y'])
+                    else:
+                        # 使用默认位置
+                        self.move_button.move(self.width() - 140, self.height() - 280)
+            else:
+                # 配置文件不存在，使用默认位置
+                self.delete_button.move(self.width() - 140, self.height() - 140)
+                self.move_button.move(self.width() - 140, self.height() - 280)
+        except Exception as e:
+            print(f'加载按钮位置失败: {str(e)}')
+            # 出错时使用默认位置
+            self.delete_button.move(self.width() - 140, self.height() - 140)
+            self.move_button.move(self.width() - 140, self.height() - 280)
+
+    def save_button_positions(self):
+        """保存按钮位置到配置文件"""
+        try:
+            config_file = self.get_config_file_path()
+
+            # 读取现有配置或创建新配置
+            config = {}
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+
+            # 保存按钮位置
+            button_positions = {}
+            button_positions['delete'] = {
+                'x': self.delete_button.x(),
+                'y': self.delete_button.y()
+            }
+            button_positions['move'] = {
+                'x': self.move_button.x(),
+                'y': self.move_button.y()
+            }
+
+            config['button_positions'] = button_positions
+
+            # 写入配置文件
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+            print(f'按钮位置已保存')
+        except Exception as e:
+            print(f'保存按钮位置失败: {str(e)}')
+
+    def show_touch_buttons(self):
+        """显示触屏按钮"""
+        try:
+            if self.current_image_path:  # 只有在有图片时才显示
+                self.delete_button.show()
+                self.delete_button.raise_()
+                self.move_button.show()
+                self.move_button.raise_()
+        except Exception as e:
+            print(f'显示触屏按钮失败: {str(e)}')
+
+    def hide_touch_buttons(self):
+        """隐藏触屏按钮"""
+        try:
+            self.delete_button.hide()
+            self.move_button.hide()
+        except Exception as e:
+            print(f'隐藏触屏按钮失败: {str(e)}')
 
     def create_menus(self):
         # 文件菜单
@@ -569,6 +771,10 @@ class ImageViewer(QMainWindow):
     def mousePressEvent(self, event):
         try:
             if event.button() == Qt.LeftButton and self.image:
+                # 如果是触摸滑动，不触发涂鸦
+                if self.is_touch_swipe:
+                    return
+
                 if event.modifiers() == Qt.AltModifier:  # 按住Alt键进行平移
                     self.panning = True
                     self.last_pan_pos = event.pos()
@@ -585,6 +791,10 @@ class ImageViewer(QMainWindow):
 
     def mouseMoveEvent(self, event):
         try:
+            # 如果是触摸滑动，不触发涂鸦
+            if self.is_touch_swipe:
+                return
+
             if self.panning and self.last_pan_pos:
                 # 计算移动距离
                 delta = event.pos() - self.last_pan_pos
@@ -605,6 +815,10 @@ class ImageViewer(QMainWindow):
     def mouseReleaseEvent(self, event):
         try:
             if event.button() == Qt.LeftButton:
+                # 如果是触摸滑动，不触发涂鸦
+                if self.is_touch_swipe:
+                    return
+
                 if self.panning:
                     self.panning = False
                     self.last_pan_pos = None
@@ -825,6 +1039,12 @@ class ImageViewer(QMainWindow):
     def event(self, event):
         if event.type() == QEvent.Gesture:
             return self.gestureEvent(event)
+        elif event.type() == QEvent.TouchBegin:
+            return self.touchBeginEvent(event)
+        elif event.type() == QEvent.TouchUpdate:
+            return self.touchUpdateEvent(event)
+        elif event.type() == QEvent.TouchEnd:
+            return self.touchEndEvent(event)
         return super(ImageViewer, self).event(event)
 
     def gestureEvent(self, event):
@@ -867,6 +1087,78 @@ class ImageViewer(QMainWindow):
                     v_bar.setValue(int(new_v_offset))
 
             return True
+        return False
+
+    def touchBeginEvent(self, event):
+        """处理触摸开始事件"""
+        try:
+            touch_points = event.touchPoints()
+            if len(touch_points) == 1:  # 单指触摸
+                point = touch_points[0]
+                self.touch_start_pos = point.pos()
+                self.touch_current_pos = point.pos()
+                self.is_touch_swipe = False
+
+                # 显示触屏按钮
+                self.show_touch_buttons()
+
+                event.accept()
+                return True
+        except Exception as e:
+            print(f'触摸开始事件失败: {str(e)}')
+        return False
+
+    def touchUpdateEvent(self, event):
+        """处理触摸更新事件"""
+        try:
+            touch_points = event.touchPoints()
+            if len(touch_points) == 1 and self.touch_start_pos:  # 单指滑动
+                point = touch_points[0]
+                self.touch_current_pos = point.pos()
+
+                # 计算滑动距离
+                dx = self.touch_current_pos.x() - self.touch_start_pos.x()
+                dy = self.touch_current_pos.y() - self.touch_start_pos.y()
+
+                # 判断是否为水平滑动（水平距离大于垂直距离）
+                if abs(dx) > abs(dy) and abs(dx) > 10:
+                    self.is_touch_swipe = True
+                    event.accept()
+                    return True
+        except Exception as e:
+            print(f'触摸更新事件失败: {str(e)}')
+        return False
+
+    def touchEndEvent(self, event):
+        """处理触摸结束事件"""
+        try:
+            if self.is_touch_swipe and self.touch_start_pos and self.touch_current_pos:
+                # 计算滑动距离
+                dx = self.touch_current_pos.x() - self.touch_start_pos.x()
+                dy = self.touch_current_pos.y() - self.touch_start_pos.y()
+
+                # 如果水平滑动距离超过阈值，且主要是水平方向
+                if abs(dx) > self.swipe_threshold and abs(dx) > abs(dy):
+                    if dx > 0:
+                        # 向右滑动，显示上一张
+                        self.show_previous_image()
+                    else:
+                        # 向左滑动，显示下一张
+                        self.show_next_image()
+
+                    # 重置状态
+                    self.touch_start_pos = None
+                    self.touch_current_pos = None
+                    self.is_touch_swipe = False
+                    event.accept()
+                    return True
+
+            # 重置状态
+            self.touch_start_pos = None
+            self.touch_current_pos = None
+            self.is_touch_swipe = False
+        except Exception as e:
+            print(f'触摸结束事件失败: {str(e)}')
         return False
 
     def wheelEvent(self, event):
@@ -943,6 +1235,11 @@ class ImageViewer(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, '错误', f'打开图片失败: {str(e)}')
             print(traceback.format_exc())
+
+    def resizeEvent(self, event):
+        """窗口大小改变事件"""
+        super().resizeEvent(event)
+        # 不再自动重新定位按钮，保持用户设置的位置
 
 if __name__ == '__main__':
     try:
