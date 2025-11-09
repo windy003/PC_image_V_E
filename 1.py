@@ -685,6 +685,10 @@ class ImageViewer(QMainWindow):
 
                 # 更新图片列表
                 self.update_image_list()
+
+                # 更新窗口标题显示图片名称
+                image_name = os.path.basename(file_path)
+                self.setWindowTitle(f'图片查看和编辑工具 v{VERSION} ----------------- {image_name}')
         except Exception as e:
             QMessageBox.critical(self, '错误', f'打开图片失败: {str(e)}')
             print(traceback.format_exc())
@@ -932,6 +936,10 @@ class ImageViewer(QMainWindow):
 
             # 更新图片列表
             self.update_image_list()
+
+            # 更新窗口标题显示图片名称
+            image_name = os.path.basename(file_path)
+            self.setWindowTitle(f'图片查看和编辑工具 v{VERSION} ----------------- {image_name}')
         except Exception as e:
             QMessageBox.critical(self, '错误', f'打开图片失败: {str(e)}')
             print(traceback.format_exc())
