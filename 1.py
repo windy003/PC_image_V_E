@@ -49,6 +49,42 @@ class DraggableButton(QPushButton):
                     self.parent().save_button_positions()
             event.accept()
 
+class DraggableButtonContainer(QLabel):
+    """可拖动的按钮容器，用于将多个按钮组合在一起移动"""
+    def __init__(self, parent=None, container_id=None):
+        super().__init__(parent)
+        self.dragging = False
+        self.drag_position = QPoint()
+        self.press_pos = QPoint()
+        self.container_id = container_id
+        self.setStyleSheet("background: transparent;")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.dragging = False
+            self.press_pos = event.globalPos()
+            self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton:
+            # 如果移动距离超过10像素，认为是拖动
+            if (event.globalPos() - self.press_pos).manhattanLength() > 10:
+                self.dragging = True
+                self.move(event.globalPos() - self.drag_position)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            was_dragging = self.dragging
+            self.dragging = False
+
+            # 如果进行了拖动，通知父窗口保存位置
+            if was_dragging and self.parent():
+                if hasattr(self.parent(), 'save_button_positions'):
+                    self.parent().save_button_positions()
+            event.accept()
+
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
     try:
@@ -219,8 +255,12 @@ class ImageViewer(QMainWindow):
             self.move_button.clicked.connect(self.copy_to_parent_directory)
             self.move_button.hide()
 
-            # 创建上一张按钮
-            self.prev_button = DraggableButton("◀\n上一张", self, button_id="prev")
+            # 创建导航按钮容器（包含上一张和下一张按钮）
+            self.nav_container = DraggableButtonContainer(self, container_id="nav")
+            self.nav_container.setFixedSize(260, 120)  # 宽度容纳两个按钮 + 间距
+
+            # 创建上一张按钮（不再单独可拖动）
+            self.prev_button = QPushButton("◀\n上一张", self.nav_container)
             self.prev_button.setFixedSize(120, 120)
             self.prev_button.setStyleSheet("""
                 QPushButton {
@@ -242,10 +282,10 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.prev_button.clicked.connect(self.show_previous_image)
-            self.prev_button.hide()
+            self.prev_button.move(0, 0)  # 在容器内的位置
 
-            # 创建下一张按钮
-            self.next_button = DraggableButton("▶\n下一张", self, button_id="next")
+            # 创建下一张按钮（不再单独可拖动）
+            self.next_button = QPushButton("▶\n下一张", self.nav_container)
             self.next_button.setFixedSize(120, 120)
             self.next_button.setStyleSheet("""
                 QPushButton {
@@ -267,7 +307,9 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.next_button.clicked.connect(self.show_next_image)
-            self.next_button.hide()
+            self.next_button.move(140, 0)  # 在容器内的位置，120像素宽度 + 20像素间距
+
+            self.nav_container.hide()
 
             # 设置初始位置（从配置加载或使用默认位置）
             self.load_button_positions()
@@ -307,34 +349,24 @@ class ImageViewer(QMainWindow):
                         # 使用默认位置（删除按钮上方）
                         self.move_button.move(self.width() - 140, self.height() - 280)
 
-                    # 加载上一张按钮位置
-                    if 'prev' in button_positions:
-                        pos = button_positions['prev']
-                        self.prev_button.move(pos['x'], pos['y'])
+                    # 加载导航按钮容器位置
+                    if 'nav' in button_positions:
+                        pos = button_positions['nav']
+                        self.nav_container.move(pos['x'], pos['y'])
                     else:
                         # 使用默认位置（左侧中间）
-                        self.prev_button.move(20, self.height() // 2 - 60)
-
-                    # 加载下一张按钮位置
-                    if 'next' in button_positions:
-                        pos = button_positions['next']
-                        self.next_button.move(pos['x'], pos['y'])
-                    else:
-                        # 使用默认位置（右侧中间）
-                        self.next_button.move(self.width() - 140, self.height() // 2 - 60)
+                        self.nav_container.move(20, self.height() // 2 - 60)
             else:
                 # 配置文件不存在，使用默认位置
                 self.delete_button.move(self.width() - 140, self.height() - 140)
                 self.move_button.move(self.width() - 140, self.height() - 280)
-                self.prev_button.move(20, self.height() // 2 - 60)
-                self.next_button.move(self.width() - 140, self.height() // 2 - 60)
+                self.nav_container.move(20, self.height() // 2 - 60)
         except Exception as e:
             print(f'加载按钮位置失败: {str(e)}')
             # 出错时使用默认位置
             self.delete_button.move(self.width() - 140, self.height() - 140)
             self.move_button.move(self.width() - 140, self.height() - 280)
-            self.prev_button.move(20, self.height() // 2 - 60)
-            self.next_button.move(self.width() - 140, self.height() // 2 - 60)
+            self.nav_container.move(20, self.height() // 2 - 60)
 
     def save_button_positions(self):
         """保存按钮位置到配置文件"""
@@ -357,13 +389,9 @@ class ImageViewer(QMainWindow):
                 'x': self.move_button.x(),
                 'y': self.move_button.y()
             }
-            button_positions['prev'] = {
-                'x': self.prev_button.x(),
-                'y': self.prev_button.y()
-            }
-            button_positions['next'] = {
-                'x': self.next_button.x(),
-                'y': self.next_button.y()
+            button_positions['nav'] = {
+                'x': self.nav_container.x(),
+                'y': self.nav_container.y()
             }
 
             config['button_positions'] = button_positions
@@ -384,10 +412,8 @@ class ImageViewer(QMainWindow):
                 self.delete_button.raise_()
                 self.move_button.show()
                 self.move_button.raise_()
-                self.prev_button.show()
-                self.prev_button.raise_()
-                self.next_button.show()
-                self.next_button.raise_()
+                self.nav_container.show()
+                self.nav_container.raise_()
         except Exception as e:
             print(f'显示触屏按钮失败: {str(e)}')
 
@@ -396,8 +422,7 @@ class ImageViewer(QMainWindow):
         try:
             self.delete_button.hide()
             self.move_button.hide()
-            self.prev_button.hide()
-            self.next_button.hide()
+            self.nav_container.hide()
         except Exception as e:
             print(f'隐藏触屏按钮失败: {str(e)}')
 
