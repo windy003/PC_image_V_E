@@ -535,17 +535,27 @@ class ImageViewer(QMainWindow):
                 self.show_notification("没有可删除的图片")
                 return
 
+            # 先更新图片列表，确保列表是最新的
+            self.update_image_list()
+
             if not os.path.exists(self.current_image_path):
                 self.show_notification("图片文件不存在")
                 return
 
-            # 记录删除的文件路径
+            # 记录删除的文件路径和索引
             deleted_path = self.current_image_path
             filename = os.path.basename(deleted_path)
+
+            # 记录当前图片在列表中的索引（删除前）
+            if deleted_path in self.image_list:
+                deleted_index = self.image_list.index(deleted_path)
+            else:
+                deleted_index = self.current_image_index
 
             # 创建临时备份文件（用于撤销）
             import tempfile
             import shutil
+            import time
             temp_dir = tempfile.gettempdir()
             backup_path = os.path.join(temp_dir, f"image_backup_{filename}")
 
@@ -574,17 +584,55 @@ class ImageViewer(QMainWindow):
                 }
 
                 print(f"Debug: File deleted, last_deleted_file set to: {self.last_deleted_file}")
-                self.show_notification(f"已删除: {filename} (Ctrl+Z 可撤销)")
 
-                # 清空当前图片
-                self.image = None
-                self.current_image_path = None
-                self.image_label.clear()
+                # 等待文件系统完成删除操作
+                time.sleep(0.2)
 
-                # 从列表中移除已删除的图片
-                if deleted_path in self.image_list:
-                    self.image_list.remove(deleted_path)
-                    # 索引不需要更新，因为图片已清空
+                # 重新扫描目录获取最新的图片列表
+                directory = os.path.dirname(deleted_path)
+                image_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
+                all_files = []
+                for file in os.listdir(directory):
+                    if file.lower().endswith(image_extensions):
+                        full_path = os.path.normpath(os.path.join(directory, file))
+                        # 确保文件真实存在且可访问
+                        if os.path.exists(full_path) and os.path.isfile(full_path):
+                            all_files.append(full_path)
+                all_files.sort()
+                self.image_list = all_files
+
+                # 根据删除前的索引，加载下一张图片
+                if self.image_list:
+                    # 如果删除的是最后一张，则显示新的最后一张
+                    if deleted_index >= len(self.image_list):
+                        self.current_image_index = len(self.image_list) - 1
+                    else:
+                        # 否则显示相同索引位置的图片（原来的下一张）
+                        self.current_image_index = deleted_index
+
+                    # 加载图片
+                    next_image_path = self.image_list[self.current_image_index]
+
+                    # 直接加载图片，不调用 load_image 以避免再次更新列表
+                    self.image = Image.open(next_image_path)
+                    self.current_image_path = next_image_path
+                    self.last_save_path = next_image_path
+                    self.add_to_history()
+                    self.display_image()
+
+                    # 更新窗口标题
+                    next_filename = os.path.basename(next_image_path)
+                    self.setWindowTitle(f'图片查看和编辑工具 v{VERSION} ----------------- {next_filename}')
+
+                    # 显示通知
+                    self.show_notification(f"已删除 {filename}，切换到: {next_filename} ({self.current_image_index + 1}/{len(self.image_list)})")
+                else:
+                    # 如果没有图片了，清空显示
+                    self.image = None
+                    self.current_image_path = None
+                    self.image_label.clear()
+                    self.current_image_index = -1
+                    self.show_notification(f"已删除: {filename} (Ctrl+Z 可撤销)")
             else:
                 self.show_notification("无法访问该文件")
                 # 删除失败，清理备份文件
@@ -659,7 +707,9 @@ class ImageViewer(QMainWindow):
             for file in os.listdir(directory):
                 if file.lower().endswith(image_extensions):
                     full_path = os.path.normpath(os.path.join(directory, file))
-                    all_files.append(full_path)
+                    # 确保文件真实存在且可访问
+                    if os.path.exists(full_path) and os.path.isfile(full_path):
+                        all_files.append(full_path)
 
             # 按文件名排序
             all_files.sort()
