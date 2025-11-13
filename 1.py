@@ -57,17 +57,24 @@ class DraggableButtonContainer(QLabel):
         self.drag_position = QPoint()
         self.press_pos = QPoint()
         self.container_id = container_id
+        self.has_moved = False  # 新增：标记是否有任何移动
         self.setStyleSheet("background: transparent;")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.dragging = False
+            self.has_moved = False  # 重置移动标志
             self.press_pos = event.globalPos()
             self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
-            event.accept()
+            # 不接受事件，让子组件也能接收
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.LeftButton:
+            # 检查是否有任何移动（阈值设为3像素，更灵敏）
+            if (event.globalPos() - self.press_pos).manhattanLength() > 3:
+                self.has_moved = True
+
             # 如果移动距离超过10像素，认为是拖动
             if (event.globalPos() - self.press_pos).manhattanLength() > 10:
                 self.dragging = True
@@ -77,13 +84,21 @@ class DraggableButtonContainer(QLabel):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             was_dragging = self.dragging
-            self.dragging = False
 
-            # 如果进行了拖动，通知父窗口保存位置
-            if was_dragging and self.parent():
-                if hasattr(self.parent(), 'save_button_positions'):
-                    self.parent().save_button_positions()
-            event.accept()
+            # 如果有任何移动，阻止点击事件传递给子按钮
+            if self.has_moved:
+                event.accept()
+                # 如果进行了拖动，通知父窗口保存位置
+                if was_dragging and self.parent():
+                    if hasattr(self.parent(), 'save_button_positions'):
+                        self.parent().save_button_positions()
+            else:
+                # 没有移动，让事件传递给子按钮
+                super().mouseReleaseEvent(event)
+
+            # 重置状态
+            self.dragging = False
+            self.has_moved = False
 
 def resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的环境"""
