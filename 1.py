@@ -796,7 +796,7 @@ class ImageViewer(QMainWindow):
             print(traceback.format_exc())
 
     def copy_to_parent_directory(self):
-        """将当前图片复制到上层目录"""
+        """将当前图片复制到上层目录，然后删除当前图片并加载下一张"""
         try:
             if not self.current_image_path:
                 self.show_notification("没有可复制的图片")
@@ -828,10 +828,16 @@ class ImageViewer(QMainWindow):
             # 复制文件
             import shutil
             shutil.copy2(self.current_image_path, destination)
-            self.show_notification(f"已复制到: {os.path.basename(destination)}")
+
+            # 复制成功后，删除当前图片（会自动加载下一张）
+            copied_filename = os.path.basename(destination)
+            self.delete_current_image()
+
+            # 显示通知（覆盖删除操作的通知）
+            self.show_notification(f"已复制到上层: {copied_filename}")
 
         except Exception as e:
-            self.show_notification(f"复制失败: {str(e)}")
+            self.show_notification(f"操作失败: {str(e)}")
             print(traceback.format_exc())
 
     def eventFilter(self, obj, event):
