@@ -222,8 +222,15 @@ class ImageViewer(QMainWindow):
     def create_touch_buttons(self):
         """创建触屏操作按钮"""
         try:
-            # 创建删除按钮
-            self.delete_button = DraggableButton("🗑️\n删除", self, button_id="delete")
+            # 创建统一的按钮容器（包含所有四个按钮）
+            # 布局：2x2 网格
+            # [删除]   [上层]
+            # [上一张] [下一张]
+            self.all_buttons_container = DraggableButtonContainer(self, container_id="all_buttons")
+            self.all_buttons_container.setFixedSize(260, 260)  # 2x2布局：120*2 + 20间距
+
+            # 创建删除按钮（不再单独可拖动）
+            self.delete_button = QPushButton("🗑️\n删除", self.all_buttons_container)
             self.delete_button.setFixedSize(120, 120)
             self.delete_button.setStyleSheet("""
                 QPushButton {
@@ -245,10 +252,10 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.delete_button.clicked.connect(self.delete_current_image)
-            self.delete_button.hide()
+            self.delete_button.move(0, 0)  # 左上角
 
-            # 创建移动到上层目录按钮
-            self.move_button = DraggableButton("📤\n上层", self, button_id="move")
+            # 创建移动到上层目录按钮（不再单独可拖动）
+            self.move_button = QPushButton("📤\n上层", self.all_buttons_container)
             self.move_button.setFixedSize(120, 120)
             self.move_button.setStyleSheet("""
                 QPushButton {
@@ -270,14 +277,10 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.move_button.clicked.connect(self.copy_to_parent_directory)
-            self.move_button.hide()
-
-            # 创建导航按钮容器（包含上一张和下一张按钮）
-            self.nav_container = DraggableButtonContainer(self, container_id="nav")
-            self.nav_container.setFixedSize(260, 120)  # 宽度容纳两个按钮 + 间距
+            self.move_button.move(140, 0)  # 右上角
 
             # 创建上一张按钮（不再单独可拖动）
-            self.prev_button = QPushButton("◀\n上一张", self.nav_container)
+            self.prev_button = QPushButton("◀\n上一张", self.all_buttons_container)
             self.prev_button.setFixedSize(120, 120)
             self.prev_button.setStyleSheet("""
                 QPushButton {
@@ -299,10 +302,10 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.prev_button.clicked.connect(self.show_previous_image)
-            self.prev_button.move(0, 0)  # 在容器内的位置
+            self.prev_button.move(0, 140)  # 左下角
 
             # 创建下一张按钮（不再单独可拖动）
-            self.next_button = QPushButton("▶\n下一张", self.nav_container)
+            self.next_button = QPushButton("▶\n下一张", self.all_buttons_container)
             self.next_button.setFixedSize(120, 120)
             self.next_button.setStyleSheet("""
                 QPushButton {
@@ -324,9 +327,9 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.next_button.clicked.connect(self.show_next_image)
-            self.next_button.move(140, 0)  # 在容器内的位置，120像素宽度 + 20像素间距
+            self.next_button.move(140, 140)  # 右下角
 
-            self.nav_container.hide()
+            self.all_buttons_container.hide()
 
             # 设置初始位置（从配置加载或使用默认位置）
             self.load_button_positions()
@@ -350,40 +353,20 @@ class ImageViewer(QMainWindow):
                     config = json.load(f)
                     button_positions = config.get('button_positions', {})
 
-                    # 加载删除按钮位置
-                    if 'delete' in button_positions:
-                        pos = button_positions['delete']
-                        self.delete_button.move(pos['x'], pos['y'])
+                    # 加载统一按钮容器位置
+                    if 'all_buttons' in button_positions:
+                        pos = button_positions['all_buttons']
+                        self.all_buttons_container.move(pos['x'], pos['y'])
                     else:
                         # 使用默认位置（右下角）
-                        self.delete_button.move(self.width() - 140, self.height() - 140)
-
-                    # 加载移动按钮位置
-                    if 'move' in button_positions:
-                        pos = button_positions['move']
-                        self.move_button.move(pos['x'], pos['y'])
-                    else:
-                        # 使用默认位置（删除按钮上方）
-                        self.move_button.move(self.width() - 140, self.height() - 280)
-
-                    # 加载导航按钮容器位置
-                    if 'nav' in button_positions:
-                        pos = button_positions['nav']
-                        self.nav_container.move(pos['x'], pos['y'])
-                    else:
-                        # 使用默认位置（左侧中间）
-                        self.nav_container.move(20, self.height() // 2 - 60)
+                        self.all_buttons_container.move(self.width() - 280, self.height() - 280)
             else:
                 # 配置文件不存在，使用默认位置
-                self.delete_button.move(self.width() - 140, self.height() - 140)
-                self.move_button.move(self.width() - 140, self.height() - 280)
-                self.nav_container.move(20, self.height() // 2 - 60)
+                self.all_buttons_container.move(self.width() - 280, self.height() - 280)
         except Exception as e:
             print(f'加载按钮位置失败: {str(e)}')
             # 出错时使用默认位置
-            self.delete_button.move(self.width() - 140, self.height() - 140)
-            self.move_button.move(self.width() - 140, self.height() - 280)
-            self.nav_container.move(20, self.height() // 2 - 60)
+            self.all_buttons_container.move(self.width() - 280, self.height() - 280)
 
     def save_button_positions(self):
         """保存按钮位置到配置文件"""
@@ -396,19 +379,11 @@ class ImageViewer(QMainWindow):
                 with open(config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
 
-            # 保存按钮位置
+            # 保存统一按钮容器位置
             button_positions = {}
-            button_positions['delete'] = {
-                'x': self.delete_button.x(),
-                'y': self.delete_button.y()
-            }
-            button_positions['move'] = {
-                'x': self.move_button.x(),
-                'y': self.move_button.y()
-            }
-            button_positions['nav'] = {
-                'x': self.nav_container.x(),
-                'y': self.nav_container.y()
+            button_positions['all_buttons'] = {
+                'x': self.all_buttons_container.x(),
+                'y': self.all_buttons_container.y()
             }
 
             config['button_positions'] = button_positions
@@ -425,21 +400,15 @@ class ImageViewer(QMainWindow):
         """显示触屏按钮"""
         try:
             if self.current_image_path:  # 只有在有图片时才显示
-                self.delete_button.show()
-                self.delete_button.raise_()
-                self.move_button.show()
-                self.move_button.raise_()
-                self.nav_container.show()
-                self.nav_container.raise_()
+                self.all_buttons_container.show()
+                self.all_buttons_container.raise_()
         except Exception as e:
             print(f'显示触屏按钮失败: {str(e)}')
 
     def hide_touch_buttons(self):
         """隐藏触屏按钮"""
         try:
-            self.delete_button.hide()
-            self.move_button.hide()
-            self.nav_container.hide()
+            self.all_buttons_container.hide()
         except Exception as e:
             print(f'隐藏触屏按钮失败: {str(e)}')
 
