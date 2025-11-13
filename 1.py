@@ -202,6 +202,23 @@ class ImageViewer(QMainWindow):
             QMessageBox.critical(self, '错误', f'初始化失败: {str(e)}')
             print(traceback.format_exc())
 
+    def update_window_title(self):
+        """更新窗口标题，包含图片名称和位置信息"""
+        try:
+            if self.current_image_path:
+                image_name = os.path.basename(self.current_image_path)
+                # 如果有图片列表，显示位置信息
+                if self.image_list and self.current_image_index >= 0:
+                    position_info = f"({self.current_image_index + 1}/{len(self.image_list)})"
+                    self.setWindowTitle(f'图片查看和编辑工具 v{VERSION} ----------------- {image_name} {position_info}')
+                else:
+                    self.setWindowTitle(f'图片查看和编辑工具 v{VERSION} ----------------- {image_name}')
+            else:
+                self.setWindowTitle(f'图片查看和编辑工具 v{VERSION}')
+        except Exception as e:
+            print(f'更新窗口标题失败: {str(e)}')
+            self.setWindowTitle(f'图片查看和编辑工具 v{VERSION}')
+
     def create_touch_buttons(self):
         """创建触屏操作按钮"""
         try:
@@ -622,7 +639,7 @@ class ImageViewer(QMainWindow):
 
                     # 更新窗口标题
                     next_filename = os.path.basename(next_image_path)
-                    self.setWindowTitle(f'图片查看和编辑工具 v{VERSION} ----------------- {next_filename}')
+                    self.update_window_title()
 
                     # 显示通知
                     self.show_notification(f"已删除 {filename}，切换到: {next_filename} ({self.current_image_index + 1}/{len(self.image_list)})")
@@ -1064,8 +1081,7 @@ class ImageViewer(QMainWindow):
                 self.update_image_list()
 
                 # 更新窗口标题显示图片名称
-                image_name = os.path.basename(file_path)
-                self.setWindowTitle(f'图片查看和编辑工具 v{VERSION} ----------------- {image_name}')
+                self.update_window_title()
         except Exception as e:
             QMessageBox.critical(self, '错误', f'打开图片失败: {str(e)}')
             print(traceback.format_exc())
@@ -1446,8 +1462,7 @@ class ImageViewer(QMainWindow):
             self.update_image_list()
 
             # 更新窗口标题显示图片名称
-            image_name = os.path.basename(file_path)
-            self.setWindowTitle(f'图片查看和编辑工具 v{VERSION} ----------------- {image_name}')
+            self.update_window_title()
         except Exception as e:
             QMessageBox.critical(self, '错误', f'打开图片失败: {str(e)}')
             print(traceback.format_exc())
