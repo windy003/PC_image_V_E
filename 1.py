@@ -237,12 +237,38 @@ class ImageViewer(QMainWindow):
     def create_touch_buttons(self):
         """创建触屏操作按钮"""
         try:
-            # 创建统一的按钮容器（包含所有四个按钮）
-            # 布局：2x2 网格
+            # 创建统一的按钮容器（包含所有五个按钮）
+            # 布局：顶部1个撤销按钮 + 2x2 网格
+            #      [撤销]
             # [删除]   [上层]
             # [上一张] [下一张]
             self.all_buttons_container = DraggableButtonContainer(self, container_id="all_buttons")
-            self.all_buttons_container.setFixedSize(260, 260)  # 2x2布局：120*2 + 20间距
+            self.all_buttons_container.setFixedSize(260, 340)  # 60(撤销) + 20(间距) + 260(2x2布局)
+
+            # 创建撤销按钮（顶部居中）
+            self.undo_button = QPushButton("↶\n撤销", self.all_buttons_container)
+            self.undo_button.setFixedSize(260, 60)
+            self.undo_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 149, 0, 220);
+                    color: white;
+                    border: 4px solid white;
+                    border-radius: 30px;
+                    font-size: 18px;
+                    font-weight: bold;
+                    padding: 10px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 149, 0, 255);
+                    border: 5px solid white;
+                }
+                QPushButton:pressed {
+                    background-color: rgba(220, 120, 0, 255);
+                    border: 4px solid rgba(255, 255, 255, 180);
+                }
+            """)
+            self.undo_button.clicked.connect(self.handle_undo)
+            self.undo_button.move(0, 0)  # 顶部
 
             # 创建删除按钮（不再单独可拖动）
             self.delete_button = QPushButton("🗑️\n删除", self.all_buttons_container)
@@ -267,7 +293,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.delete_button.clicked.connect(self.delete_current_image)
-            self.delete_button.move(0, 0)  # 左上角
+            self.delete_button.move(0, 80)  # 左侧，撤销按钮下方
 
             # 创建移动到上层目录按钮（不再单独可拖动）
             self.move_button = QPushButton("📤\n上层", self.all_buttons_container)
@@ -292,7 +318,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.move_button.clicked.connect(self.copy_to_parent_directory)
-            self.move_button.move(140, 0)  # 右上角
+            self.move_button.move(140, 80)  # 右侧，撤销按钮下方
 
             # 创建上一张按钮（不再单独可拖动）
             self.prev_button = QPushButton("◀\n上一张", self.all_buttons_container)
@@ -317,7 +343,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.prev_button.clicked.connect(self.show_previous_image)
-            self.prev_button.move(0, 140)  # 左下角
+            self.prev_button.move(0, 220)  # 左下角
 
             # 创建下一张按钮（不再单独可拖动）
             self.next_button = QPushButton("▶\n下一张", self.all_buttons_container)
@@ -342,7 +368,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.next_button.clicked.connect(self.show_next_image)
-            self.next_button.move(140, 140)  # 右下角
+            self.next_button.move(140, 220)  # 右下角
 
             self.all_buttons_container.hide()
 
@@ -374,14 +400,14 @@ class ImageViewer(QMainWindow):
                         self.all_buttons_container.move(pos['x'], pos['y'])
                     else:
                         # 使用默认位置（右下角）
-                        self.all_buttons_container.move(self.width() - 280, self.height() - 280)
+                        self.all_buttons_container.move(self.width() - 280, self.height() - 360)
             else:
                 # 配置文件不存在，使用默认位置
-                self.all_buttons_container.move(self.width() - 280, self.height() - 280)
+                self.all_buttons_container.move(self.width() - 280, self.height() - 360)
         except Exception as e:
             print(f'加载按钮位置失败: {str(e)}')
             # 出错时使用默认位置
-            self.all_buttons_container.move(self.width() - 280, self.height() - 280)
+            self.all_buttons_container.move(self.width() - 280, self.height() - 360)
 
     def save_button_positions(self):
         """保存按钮位置到配置文件"""
