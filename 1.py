@@ -1392,8 +1392,19 @@ class ImageViewer(QMainWindow):
 
                 # 如果移动距离很小（小于15像素），认为是点击而非滑动
                 if move_distance < 15:
-                    # 点击操作 - 切换按钮显示/隐藏
-                    self.toggle_touch_buttons()
+                    # 检查点击位置是否在按钮容器内
+                    click_pos = self.mapFromGlobal(event.touchPoints()[0].screenPos().toPoint()) if event.touchPoints() else self.touch_current_pos.toPoint()
+
+                    # 判断点击是否在按钮容器内
+                    is_on_button = False
+                    if self.all_buttons_container.isVisible():
+                        button_rect = self.all_buttons_container.geometry()
+                        if button_rect.contains(click_pos):
+                            is_on_button = True
+
+                    # 只有点击在空白区域时才切换按钮显示/隐藏
+                    if not is_on_button:
+                        self.toggle_touch_buttons()
                 # 判断是否为快速水平滑动（切换图片）
                 # 条件：水平距离超过阈值，且主要是水平方向，且没有被标记为平移
                 elif (abs(dx) > self.swipe_threshold and
