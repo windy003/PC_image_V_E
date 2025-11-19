@@ -174,6 +174,7 @@ class ImageViewer(QMainWindow):
             self.is_in_touch_mode = False  # 是否处于触摸模式
             self.touch_point_count = 0  # 当前触摸点数量
             self.is_pinching = False  # 是否正在进行双指缩放
+            self.touch_buttons_visible = False  # 触屏按钮是否可见
 
             # 启用触摸事件
             self.setAttribute(Qt.WA_AcceptTouchEvents, True)
@@ -443,6 +444,7 @@ class ImageViewer(QMainWindow):
             if self.current_image_path:  # 只有在有图片时才显示
                 self.all_buttons_container.show()
                 self.all_buttons_container.raise_()
+                self.touch_buttons_visible = True
         except Exception as e:
             print(f'显示触屏按钮失败: {str(e)}')
 
@@ -450,8 +452,19 @@ class ImageViewer(QMainWindow):
         """隐藏触屏按钮"""
         try:
             self.all_buttons_container.hide()
+            self.touch_buttons_visible = False
         except Exception as e:
             print(f'隐藏触屏按钮失败: {str(e)}')
+
+    def toggle_touch_buttons(self):
+        """切换触屏按钮的显示/隐藏状态"""
+        try:
+            if self.touch_buttons_visible:
+                self.hide_touch_buttons()
+            else:
+                self.show_touch_buttons()
+        except Exception as e:
+            print(f'切换触屏按钮失败: {str(e)}')
 
     def create_menus(self):
         # 文件菜单
@@ -1307,9 +1320,6 @@ class ImageViewer(QMainWindow):
                 self.is_touch_swipe = False
                 self.is_touch_panning = False
 
-                # 显示触屏按钮
-                self.show_touch_buttons()
-
                 event.accept()
                 return True
         except Exception as e:
@@ -1371,15 +1381,22 @@ class ImageViewer(QMainWindow):
     def touchEndEvent(self, event):
         """处理触摸结束事件"""
         try:
-            # 检查是否应该触发滑动切换图片
+            # 检查是否应该触发滑动切换图片或点击切换按钮
             if self.touch_start_pos and self.touch_current_pos:
                 # 计算总滑动距离
                 dx = self.touch_current_pos.x() - self.touch_start_pos.x()
                 dy = self.touch_current_pos.y() - self.touch_start_pos.y()
 
+                # 计算移动距离
+                move_distance = abs(dx) + abs(dy)
+
+                # 如果移动距离很小（小于15像素），认为是点击而非滑动
+                if move_distance < 15:
+                    # 点击操作 - 切换按钮显示/隐藏
+                    self.toggle_touch_buttons()
                 # 判断是否为快速水平滑动（切换图片）
                 # 条件：水平距离超过阈值，且主要是水平方向，且没有被标记为平移
-                if (abs(dx) > self.swipe_threshold and
+                elif (abs(dx) > self.swipe_threshold and
                     abs(dx) > abs(dy) * 1.5 and
                     not self.is_touch_panning):
 
