@@ -60,14 +60,54 @@ class DraggableButtonContainer(QLabel):
         self.has_moved = False  # 新增：标记是否有任何移动
         self.setStyleSheet("background: transparent;")
 
+        # 创建手柄区域标签
+        self.handle = QLabel(self)
+        self.handle.setStyleSheet("""
+            QLabel {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(100, 100, 100, 200),
+                    stop:1 rgba(80, 80, 80, 200));
+                border: 2px solid rgba(255, 255, 255, 150);
+                border-radius: 15px;
+                border-bottom-left-radius: 0px;
+                border-bottom-right-radius: 0px;
+            }
+        """)
+        self.handle.setFixedHeight(30)
+        self.handle.setAlignment(Qt.AlignCenter)
+
+        # 在手柄中央添加三条横线表示可拖动
+        handle_icon = QLabel("⋮⋮⋮", self.handle)
+        handle_icon.setStyleSheet("""
+            QLabel {
+                color: rgba(255, 255, 255, 200);
+                background: transparent;
+                border: none;
+                font-size: 16px;
+                font-weight: bold;
+            }
+        """)
+        handle_icon.setAlignment(Qt.AlignCenter)
+        handle_icon.setGeometry(0, 0, 260, 30)
+
+    def is_on_handle(self, pos):
+        """检查点击位置是否在手柄区域"""
+        handle_rect = self.handle.geometry()
+        return handle_rect.contains(pos)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.dragging = False
             self.has_moved = False  # 重置移动标志
             self.press_pos = event.globalPos()
             self.drag_position = event.globalPos() - self.frameGeometry().topLeft()
-            # 不接受事件，让子组件也能接收
-            super().mousePressEvent(event)
+
+            # 如果点击在手柄区域，准备拖动整个容器
+            if self.is_on_handle(event.pos()):
+                event.accept()
+            else:
+                # 不在手柄区域，让子组件也能接收事件
+                super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.LeftButton:
@@ -239,14 +279,19 @@ class ImageViewer(QMainWindow):
         """创建触屏操作按钮"""
         try:
             # 创建统一的按钮容器（包含所有五个按钮）
-            # 布局：顶部1个撤销按钮 + 2x2 网格
+            # 布局：手柄(30px) + 撤销按钮 + 2x2 网格
+            #   [手柄区域]
             #      [撤销]
             # [删除]   [上层]
             # [上一张] [下一张]
             self.all_buttons_container = DraggableButtonContainer(self, container_id="all_buttons")
-            self.all_buttons_container.setFixedSize(260, 340)  # 60(撤销) + 20(间距) + 260(2x2布局)
+            self.all_buttons_container.setFixedSize(260, 370)  # 30(手柄) + 60(撤销) + 20(间距) + 260(2x2布局)
 
-            # 创建撤销按钮（顶部居中）
+            # 设置手柄宽度（与容器同宽）
+            self.all_buttons_container.handle.setFixedWidth(260)
+            self.all_buttons_container.handle.move(0, 0)
+
+            # 创建撤销按钮（手柄下方）
             self.undo_button = QPushButton("↶\n撤销", self.all_buttons_container)
             self.undo_button.setFixedSize(260, 60)
             self.undo_button.setStyleSheet("""
@@ -269,7 +314,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.undo_button.clicked.connect(self.handle_undo)
-            self.undo_button.move(0, 0)  # 顶部
+            self.undo_button.move(0, 30)  # 手柄下方
 
             # 创建删除按钮（不再单独可拖动）
             self.delete_button = QPushButton("🗑️\n删除", self.all_buttons_container)
@@ -294,7 +339,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.delete_button.clicked.connect(self.delete_current_image)
-            self.delete_button.move(0, 80)  # 左侧，撤销按钮下方
+            self.delete_button.move(0, 110)  # 左侧，撤销按钮下方
 
             # 创建移动到上层目录按钮（不再单独可拖动）
             self.move_button = QPushButton("📤\n上层", self.all_buttons_container)
@@ -319,7 +364,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.move_button.clicked.connect(self.copy_to_parent_directory)
-            self.move_button.move(140, 80)  # 右侧，撤销按钮下方
+            self.move_button.move(140, 110)  # 右侧，撤销按钮下方
 
             # 创建上一张按钮（不再单独可拖动）
             self.prev_button = QPushButton("◀\n上一张", self.all_buttons_container)
@@ -344,7 +389,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.prev_button.clicked.connect(self.show_previous_image)
-            self.prev_button.move(0, 220)  # 左下角
+            self.prev_button.move(0, 250)  # 左下角
 
             # 创建下一张按钮（不再单独可拖动）
             self.next_button = QPushButton("▶\n下一张", self.all_buttons_container)
@@ -369,7 +414,7 @@ class ImageViewer(QMainWindow):
                 }
             """)
             self.next_button.clicked.connect(self.show_next_image)
-            self.next_button.move(140, 220)  # 右下角
+            self.next_button.move(140, 250)  # 右下角
 
             self.all_buttons_container.hide()
 
@@ -401,14 +446,14 @@ class ImageViewer(QMainWindow):
                         self.all_buttons_container.move(pos['x'], pos['y'])
                     else:
                         # 使用默认位置（右下角）
-                        self.all_buttons_container.move(self.width() - 280, self.height() - 360)
+                        self.all_buttons_container.move(self.width() - 280, self.height() - 390)
             else:
                 # 配置文件不存在，使用默认位置
-                self.all_buttons_container.move(self.width() - 280, self.height() - 360)
+                self.all_buttons_container.move(self.width() - 280, self.height() - 390)
         except Exception as e:
             print(f'加载按钮位置失败: {str(e)}')
             # 出错时使用默认位置
-            self.all_buttons_container.move(self.width() - 280, self.height() - 360)
+            self.all_buttons_container.move(self.width() - 280, self.height() - 390)
 
     def save_button_positions(self):
         """保存按钮位置到配置文件"""
