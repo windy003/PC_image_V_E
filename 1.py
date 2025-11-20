@@ -194,9 +194,13 @@ class ImageViewer(QMainWindow):
             self.drawing = False
             self.last_point = None
             self.brush_size = 20
-            self.current_tool = 'draw'  # 'draw' 或 'blur'
+            self.current_tool = 'draw'  # 'draw', 'blur', 或 'arrow'
             self.brush_color = QColor(255, 0, 0)  # 默认红色 (RGB: 255, 0, 0)
             self.pixmap = None
+            self.arrow_start_point = None  # 箭头起点
+            self.arrow_end_point = None  # 箭头终点
+            self.arrow_width = 5  # 箭头线条宽度
+            self.temp_arrow_layer = None  # 临时箭头图层用于预览
             self.scale_factor = 1.0  # 添加缩放因子
             self.min_scale = 0.1  # 最小缩放比例
             self.max_scale = 5.0  # 最大缩放比例
@@ -554,6 +558,11 @@ class ImageViewer(QMainWindow):
         blur_action = QAction('模糊工具(&B)', self)
         blur_action.triggered.connect(lambda: self.set_tool('blur'))
         tool_menu.addAction(blur_action)
+
+        arrow_action = QAction('箭头工具(&A)', self)
+        arrow_action.setShortcut('Ctrl+A')
+        arrow_action.triggered.connect(lambda: self.set_tool('arrow'))
+        tool_menu.addAction(arrow_action)
 
         # 设置菜单
         settings_menu = menubar.addMenu('设置(&S)')
@@ -1037,8 +1046,16 @@ class ImageViewer(QMainWindow):
                     self.drawing = True
                     self.add_to_history()
                     pos = self.image_label.mapFrom(self, event.pos())
-                    self.last_point = pos
-                    self.apply_effect(pos)
+
+                    if self.current_tool == 'arrow':
+                        # 箭头工具：记录起点
+                        self.arrow_start_point = pos
+                        self.arrow_end_point = pos
+                        # 保存当前图像用于预览
+                        self.temp_arrow_layer = self.image.copy()
+                    else:
+                        self.last_point = pos
+                        self.apply_effect(pos)
         except Exception as e:
             QMessageBox.critical(self, '错误', f'鼠标按下事件失败: {str(e)}')
             print(traceback.format_exc())
@@ -1060,8 +1077,23 @@ class ImageViewer(QMainWindow):
                 self.last_pan_pos = event.pos()
             elif self.drawing and self.image:
                 pos = self.image_label.mapFrom(self, event.pos())
-                self.apply_effect(pos)
-                self.last_point = pos
+
+                if self.current_tool == 'arrow' and self.arrow_start_point:
+                    # 箭头工具：更新终点并显示预览
+                    self.arrow_end_point = pos
+                    # 恢复原始图像
+                    self.image = self.temp_arrow_layer.copy()
+                    # 绘制预览箭头
+                    start_x, start_y = self.get_image_coordinates(self.arrow_start_point)
+                    end_x, end_y = self.get_image_coordinates(self.arrow_end_point)
+                    if start_x is not None and end_x is not None:
+                        draw = ImageDraw.Draw(self.image)
+                        self.draw_arrow(draw, start_x, start_y, end_x, end_y,
+                                      self.brush_color.getRgb()[:3], self.arrow_width)
+                    self.display_image()
+                else:
+                    self.apply_effect(pos)
+                    self.last_point = pos
         except Exception as e:
             QMessageBox.critical(self, '错误', f'鼠标移动事件失败: {str(e)}')
             print(traceback.format_exc())
@@ -1078,6 +1110,22 @@ class ImageViewer(QMainWindow):
                     self.last_pan_pos = None
                     self.setCursor(Qt.ArrowCursor)
                 else:
+                    if self.current_tool == 'arrow' and self.arrow_start_point and self.arrow_end_point:
+                        # 箭头工具：完成绘制
+                        # 恢复原始图像
+                        self.image = self.temp_arrow_layer.copy()
+                        # 绘制最终箭头
+                        start_x, start_y = self.get_image_coordinates(self.arrow_start_point)
+                        end_x, end_y = self.get_image_coordinates(self.arrow_end_point)
+                        if start_x is not None and end_x is not None:
+                            draw = ImageDraw.Draw(self.image)
+                            self.draw_arrow(draw, start_x, start_y, end_x, end_y,
+                                          self.brush_color.getRgb()[:3], self.arrow_width)
+                        # 清除箭头状态
+                        self.arrow_start_point = None
+                        self.arrow_end_point = None
+                        self.temp_arrow_layer = None
+
                     self.drawing = False
                     self.display_image()
         except Exception as e:
@@ -1114,12 +1162,59 @@ class ImageViewer(QMainWindow):
             QMessageBox.critical(self, '错误', f'应用效果失败: {str(e)}')
             print(traceback.format_exc())
 
+    def draw_arrow(self, draw_obj, start_x, start_y, end_x, end_y, color, width):
+        """绘制箭头的辅助方法"""
+        import math
+
+        # 绘制箭头主线
+        draw_obj.line([(start_x, start_y), (end_x, end_y)], fill=color, width=width)
+
+        # 计算箭头方向
+        dx = end_x - start_x
+        dy = end_y - start_y
+        length = math.sqrt(dx**2 + dy**2)
+
+        if length == 0:
+            return
+
+        # 标准化方向向量
+        dx = dx / length
+        dy = dy / length
+
+        # 箭头头部大小（根据线条宽度调整）
+        arrow_head_length = max(width * 4, 20)
+        arrow_head_width = max(width * 2.5, 12)
+
+        # 计算箭头头部的三个点
+        # 箭头尖端就是终点
+        tip_x, tip_y = end_x, end_y
+
+        # 计算箭头两侧的点
+        # 沿着箭头方向往回一段距离
+        back_x = end_x - dx * arrow_head_length
+        back_y = end_y - dy * arrow_head_length
+
+        # 垂直方向的向量
+        perp_x = -dy
+        perp_y = dx
+
+        # 箭头两侧的点
+        left_x = back_x + perp_x * arrow_head_width
+        left_y = back_y + perp_y * arrow_head_width
+        right_x = back_x - perp_x * arrow_head_width
+        right_y = back_y - perp_y * arrow_head_width
+
+        # 绘制箭头头部（三角形）
+        draw_obj.polygon([(tip_x, tip_y), (left_x, left_y), (right_x, right_y)], fill=color)
+
     def set_tool(self, tool):
         self.current_tool = tool
         if tool == 'draw':
             QMessageBox.information(self, '工具切换', '已切换到涂鸦工具')
-        else:
+        elif tool == 'blur':
             QMessageBox.information(self, '工具切换', '已切换到模糊工具')
+        else:
+            QMessageBox.information(self, '工具切换', '已切换到箭头工具\n\n使用方法：\n1. 点击设置箭头起点\n2. 拖动到终点位置\n3. 释放鼠标完成绘制')
 
     def set_brush_size(self):
         size, ok = QInputDialog.getInt(self, '设置笔刷大小', 
