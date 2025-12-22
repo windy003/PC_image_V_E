@@ -1658,14 +1658,22 @@ class ImageViewer(QMainWindow):
 
 if __name__ == '__main__':
     try:
+        # Windows 任务栏图标设置 - 在创建 QApplication 之前设置
+        try:
+            import ctypes
+            myappid = 'imageviewer.app.v1'  # 自定义应用ID
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except:
+            pass  # 非 Windows 系统会失败，忽略即可
+
         app = QApplication(sys.argv)
-        
+
         # 设置应用程序图标
         icon_path = resource_path('1024x1024.png')
         if os.path.exists(icon_path):
             app_icon = QIcon(icon_path)
             app.setWindowIcon(app_icon)
-        
+
         image_path = None
         if len(sys.argv) > 1:
             image_path = sys.argv[1]
@@ -1673,7 +1681,7 @@ if __name__ == '__main__':
         viewer = ImageViewer(image_path=image_path)
         if not image_path:
             viewer.showMaximized()
-        
+
         sys.exit(app.exec_())
     except Exception as e:
         print(f"程序发生错误: {str(e)}")
