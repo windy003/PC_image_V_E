@@ -656,18 +656,30 @@ class ImageViewer(QMainWindow):
             # 备份文件
             shutil.copy2(deleted_path, backup_path)
 
-            # 使用 Windows Shell API 移动到回收站
-            import win32com.client
-            shell = win32com.client.Dispatch("Shell.Application")
-            namespace = shell.NameSpace(0)
+            # 使用 send2trash 库移动到回收站（无确认框）
+            try:
+                from send2trash import send2trash
+                send2trash(deleted_path)
+                success = True
+            except ImportError:
+                # 如果没有 send2trash 库，使用 win32api
+                import win32api
+                import win32con
+                # FOF_ALLOWUNDO: 允许撤销（移到回收站）
+                # FOF_NOCONFIRMATION: 不显示确认对话框
+                # FOF_SILENT: 静默操作
+                result = win32api.SHFileOperation((
+                    0,  # hwnd
+                    win32con.FO_DELETE,  # 操作类型：删除
+                    deleted_path,  # 源文件
+                    None,  # 目标（删除操作不需要）
+                    win32con.FOF_ALLOWUNDO | win32con.FOF_NOCONFIRMATION | win32con.FOF_SILENT,  # 标志
+                    None,  # 进度标题
+                    None   # 进度文本
+                ))
+                success = (result == 0)
 
-            # 规范化路径（解决 OneDrive 路径问题）
-            normalized_path = os.path.normpath(os.path.abspath(deleted_path))
-
-            # 使用 Shell 命令移动到回收站
-            item = namespace.ParseName(normalized_path)
-            if item:
-                item.InvokeVerb("delete")  # 移动到回收站
+            if success:
 
                 # 记录最后删除的文件，用于撤销
                 self.last_deleted_file = {
