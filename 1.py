@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QAction, QFileDialog,
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QImage, QPen, QCursor, QIcon, QFont
 from PyQt5.QtCore import Qt, QPoint, QTemporaryFile, QEvent, QTimer
 from PIL import Image, ImageDraw
+Image.MAX_IMAGE_PIXELS = None  # 禁用PIL的图片大小限制，允许打开超大图片
 import numpy as np
 import traceback
 import json
