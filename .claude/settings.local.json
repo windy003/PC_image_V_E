@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(./.venv/Scripts/python.exe -c \"import win32com.client; from win32com.shell import shell, shellcon; print\\('pywin32 shell ok'\\)\")",
+      "Bash(./.venv/Scripts/python.exe \"C:/Users/92892/AppData/Local/Temp/claude/D--files-using-Python-PC-image-V-E/eaf88fe1-0b33-411d-a51e-58d0e46cb3e9/scratchpad/test_sort.py\")",
+      "Bash(./.venv/Scripts/python.exe -c \"import comtypes; print\\('comtypes', comtypes.__version__\\)\")",
+      "Bash(./.venv/Scripts/python.exe -m pip install comtypes)",
+      "Bash(./.venv/Scripts/python.exe -m ensurepip)",
+      "Bash(./.venv/Scripts/python.exe \"C:/Users/92892/AppData/Local/Temp/claude/D--files-using-Python-PC-image-V-E/eaf88fe1-0b33-411d-a51e-58d0e46cb3e9/scratchpad/poc_sortcols.py\")",
+      "Bash(./.venv/Scripts/python.exe \"C:/Users/92892/AppData/Local/Temp/claude/D--files-using-Python-PC-image-V-E/eaf88fe1-0b33-411d-a51e-58d0e46cb3e9/scratchpad/poc_sortcols.py\" \"\\\\\\\\\\\\\\\\192.168.2.56\\\\\\\\Users\\\\\\\\92892\\\\\\\\OneDrive\\\\\\\\图片\\\\\\\\Large_Screenshots\")",
+      "Bash(./.venv/Scripts/python.exe -m py_compile 1.py)"
     ],
     "deny": [],
     "ask": []

@@ -9,8 +9,221 @@ Image.MAX_IMAGE_PIXELS = None  # 禁用PIL的图片大小限制，允许打开�
 import numpy as np
 import traceback
 import json
+import ctypes
+import functools
+import urllib.parse
 
 VERSION = "2025/11/9-06"
+
+# ============================================================
+# 资源管理器排序探测：读取已打开的资源管理器窗口的排序列 + 升降序，
+# 让图片左右切换的顺序与资源管理器保持一致。
+# 读不到（窗口没开 / 出错）时，回退到文件名自然排序（升序）。
+# ============================================================
+
+# StrCmpLogicalW：Windows 资源管理器"名字"列使用的自然排序（10 排在 2 后面）
+try:
+    _StrCmpLogicalW = ctypes.windll.shlwapi.StrCmpLogicalW
+    _StrCmpLogicalW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+    _StrCmpLogicalW.restype = ctypes.c_int
+except Exception:
+    _StrCmpLogicalW = None
+
+
+def _natural_name_key():
+    """返回一个按文件名自然排序的 key 函数（用于 sorted 的 key）。"""
+    if _StrCmpLogicalW is not None:
+        def _cmp(a, b):
+            return _StrCmpLogicalW(os.path.basename(a), os.path.basename(b))
+        return functools.cmp_to_key(_cmp)
+    # 没有 shlwapi 时退化为普通小写字符串排序
+    return lambda p: os.path.basename(p).lower()
+
+
+# ---- 通过 COM 读取资源管理器当前排序（需要 comtypes，且对应窗口开着）----
+try:
+    import comtypes
+    import comtypes.client
+    from comtypes import GUID, COMMETHOD, STDMETHOD, IUnknown, HRESULT
+    from ctypes.wintypes import DWORD
+    from ctypes import POINTER, c_int, c_uint, byref
+
+    class _GUIDStruct(ctypes.Structure):
+        _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                    ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+    class _PROPERTYKEY(ctypes.Structure):
+        _fields_ = [("fmtid", _GUIDStruct), ("pid", DWORD)]
+
+    class _SORTCOLUMN(ctypes.Structure):
+        _fields_ = [("propkey", _PROPERTYKEY), ("direction", c_int)]
+
+    class _IServiceProvider(IUnknown):
+        _iid_ = GUID("{6d5140c1-7436-11ce-8034-00aa006009fa}")
+        _methods_ = [
+            COMMETHOD([], HRESULT, "QueryService",
+                      (['in'], POINTER(GUID), "guidService"),
+                      (['in'], POINTER(GUID), "riid"),
+                      (['out'], POINTER(ctypes.c_void_p), "ppvObject")),
+        ]
+
+    class _IShellView(IUnknown):
+        _iid_ = GUID("{000214E3-0000-0000-C000-000000000046}")
+        _methods_ = []
+
+    class _IFolderView(IUnknown):
+        _iid_ = GUID("{cde725b0-ccc9-4519-917e-325d72fab4ce}")
+        _methods_ = [STDMETHOD(HRESULT, n, []) for n in (
+            "GetCurrentViewMode", "SetCurrentViewMode", "GetFolder", "Item",
+            "ItemCount", "Items", "GetSelectionMarkedItem", "GetFocusedItem",
+            "GetItemPosition", "GetSpacing", "GetDefaultSpacing", "GetAutoArrange",
+            "SelectItem", "SelectAndPositionItems")]
+
+    class _IFolderView2(_IFolderView):
+        _iid_ = GUID("{1af3a467-214f-4298-908e-06b03e0b39f9}")
+        _methods_ = [
+            STDMETHOD(HRESULT, "SetGroupBy", []),
+            STDMETHOD(HRESULT, "GetGroupBy", []),
+            STDMETHOD(HRESULT, "SetViewProperty", []),
+            STDMETHOD(HRESULT, "GetViewProperty", []),
+            STDMETHOD(HRESULT, "SetTileViewProperties", []),
+            STDMETHOD(HRESULT, "SetExtendedTileViewProperties", []),
+            STDMETHOD(HRESULT, "SetText", []),
+            STDMETHOD(HRESULT, "SetCurrentFolderFlags", []),
+            STDMETHOD(HRESULT, "GetCurrentFolderFlags", []),
+            COMMETHOD([], HRESULT, "GetSortColumnCount",
+                      (['out'], POINTER(c_int), "pcColumns")),
+            STDMETHOD(HRESULT, "SetSortColumns", []),
+            COMMETHOD([], HRESULT, "GetSortColumns",
+                      (['in'], POINTER(_SORTCOLUMN), "rgSortColumns"),
+                      (['in'], c_uint, "cColumns")),
+        ]
+
+    class _IShellBrowser(IUnknown):
+        _iid_ = GUID("{000214E2-0000-0000-C000-000000000046}")
+        _methods_ = [STDMETHOD(HRESULT, n, []) for n in (
+            "GetWindow", "ContextSensitiveHelp", "InsertMenusSB", "SetMenuSB",
+            "RemoveMenusSB", "SetStatusTextSB", "EnableModelessSB",
+            "TranslateAcceleratorSB", "BrowseObject", "GetViewStateStream",
+            "GetControlWindow", "SendControlMsg")] + [
+            COMMETHOD([], HRESULT, "QueryActiveShellView",
+                      (['out'], POINTER(POINTER(_IShellView)), "ppshv")),
+        ]
+
+    _COMTYPES_OK = True
+except Exception:
+    _COMTYPES_OK = False
+
+# PROPERTYKEY (fmtid, pid) -> 排序类别
+_PKEY_FMT = "{B725F130-47EF-101A-A5F1-02608C9EEBAC}"  # System 属性组
+_PKEY_TO_KIND = {
+    (_PKEY_FMT, 10): "name",
+    (_PKEY_FMT, 14): "date_modified",
+    (_PKEY_FMT, 12): "size",
+    (_PKEY_FMT, 4): "type",
+    (_PKEY_FMT, 15): "date_created",
+    (_PKEY_FMT, 16): "date_accessed",
+}
+
+
+def _guid_to_str(g):
+    return "{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}" % (
+        g.Data1, g.Data2, g.Data3,
+        g.Data4[0], g.Data4[1], g.Data4[2], g.Data4[3],
+        g.Data4[4], g.Data4[5], g.Data4[6], g.Data4[7])
+
+
+def _url_to_path(url):
+    """file:// URL -> 本地路径（支持本地盘符与 UNC 网络路径）。"""
+    if not url or not url.lower().startswith("file:"):
+        return None
+    rest = url[len("file:"):]
+    if rest.startswith("///"):        # file:///D:/... 本地
+        p = urllib.parse.unquote(rest[3:])
+        return p.replace("/", "\\")
+    if rest.startswith("//"):         # file://host/share/... UNC
+        p = urllib.parse.unquote(rest[2:])
+        return "\\\\" + p.replace("/", "\\")
+    return None
+
+
+def get_explorer_sort(directory):
+    """读取打开着 directory 的资源管理器窗口的排序方式。
+    返回 (kind, ascending) 或 None。kind ∈ name/date_modified/size/type/...
+    """
+    if not _COMTYPES_OK:
+        return None
+    try:
+        target = os.path.normcase(os.path.normpath(directory))
+        shell = comtypes.client.CreateObject("Shell.Application")
+        windows = shell.Windows()
+        for i in range(windows.Count):
+            w = windows.Item(i)
+            if w is None:
+                continue
+            try:
+                path = _url_to_path(w.LocationURL)
+            except Exception:
+                continue
+            if not path or os.path.normcase(os.path.normpath(path)) != target:
+                continue
+            sp = w.QueryInterface(_IServiceProvider)
+            pbrowser = sp.QueryService(byref(_IShellBrowser._iid_),
+                                       byref(_IShellBrowser._iid_))
+            browser = ctypes.cast(pbrowser, POINTER(_IShellBrowser))
+            shellview = browser.QueryActiveShellView()
+            fv2 = shellview.QueryInterface(_IFolderView2)
+            n = fv2.GetSortColumnCount()
+            if n <= 0:
+                return None
+            arr = (_SORTCOLUMN * n)()
+            fv2.GetSortColumns(arr, n)
+            fm = _guid_to_str(arr[0].propkey.fmtid)
+            pid = arr[0].propkey.pid
+            kind = _PKEY_TO_KIND.get((fm, pid))
+            if kind is None:
+                return None
+            ascending = arr[0].direction >= 0
+            return (kind, ascending)
+    except Exception:
+        return None
+    return None
+
+
+def sort_image_files(all_files, directory):
+    """按资源管理器的排序方式给图片文件列表排序；读不到时按文件名自然排序。"""
+    sort_info = get_explorer_sort(directory)
+    if sort_info is None:
+        return sorted(all_files, key=_natural_name_key())
+
+    kind, ascending = sort_info
+    if kind == "name":
+        result = sorted(all_files, key=_natural_name_key())
+    elif kind == "size":
+        result = sorted(all_files, key=lambda p: _safe_stat(p, "size"))
+    elif kind == "type":
+        # 先按扩展名，再按文件名自然排序
+        result = sorted(all_files, key=_natural_name_key())
+        result = sorted(result, key=lambda p: os.path.splitext(p)[1].lower())
+    elif kind in ("date_modified", "date_created", "date_accessed"):
+        attr = {"date_modified": "mtime", "date_created": "ctime",
+                "date_accessed": "atime"}[kind]
+        result = sorted(all_files, key=lambda p: _safe_stat(p, attr))
+    else:
+        result = sorted(all_files, key=_natural_name_key())
+
+    if not ascending:
+        result = list(reversed(result))
+    return result
+
+
+def _safe_stat(path, attr):
+    try:
+        st = os.stat(path)
+        return {"size": st.st_size, "mtime": st.st_mtime,
+                "ctime": st.st_ctime, "atime": st.st_atime}[attr]
+    except Exception:
+        return 0
 
 class DraggableButton(QPushButton):
     """可拖动的按钮类"""
@@ -705,8 +918,8 @@ class ImageViewer(QMainWindow):
                         # 确保文件真实存在且可访问
                         if os.path.exists(full_path) and os.path.isfile(full_path):
                             all_files.append(full_path)
-                all_files.sort()
-                self.image_list = all_files
+                self.image_list = sort_image_files(all_files, directory)
+                self._listed_dir = directory
 
                 # 根据删除前的索引，加载下一张图片
                 if self.image_list:
@@ -806,6 +1019,13 @@ class ImageViewer(QMainWindow):
             # 获取当前图片所在目录
             directory = os.path.dirname(current_normalized)
 
+            # 快路径：同一目录内切换图片时，列表和排序不会变，
+            # 直接复用缓存、只更新索引，避免每次都重扫目录 + 跑 COM 探测（这是卡顿的主因）。
+            if (getattr(self, '_listed_dir', None) == directory
+                    and self.image_list and current_normalized in self.image_list):
+                self.current_image_index = self.image_list.index(current_normalized)
+                return
+
             # 支持的图片格式
             image_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp')
 
@@ -818,10 +1038,9 @@ class ImageViewer(QMainWindow):
                     if os.path.exists(full_path) and os.path.isfile(full_path):
                         all_files.append(full_path)
 
-            # 按文件名排序
-            all_files.sort()
-
-            self.image_list = all_files
+            # 按资源管理器的排序方式排序（读不到则按文件名自然排序）
+            self.image_list = sort_image_files(all_files, directory)
+            self._listed_dir = directory
 
             # 找到当前图片的索引
             try:
@@ -835,11 +1054,6 @@ class ImageViewer(QMainWindow):
                         break
                 else:
                     self.current_image_index = -1
-
-            print(f"Debug: Found {len(self.image_list)} images, current index: {self.current_image_index}")
-            print(f"Debug: Current path: {current_normalized}")
-            if self.image_list:
-                print(f"Debug: First image in list: {self.image_list[0]}")
 
         except Exception as e:
             print(f"Error updating image list: {str(e)}")
