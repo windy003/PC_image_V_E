@@ -1,2 +1,1 @@
-@echo off
-start /B pythonw "%~dp01.py" %*
+start /B "" "D:\files\using\Python\PC_image_V_E\.venv\Scripts\pythonw.exe"  "D:\files\using\Python\PC_image_V_E\1.py"   %1

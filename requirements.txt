@@ -1,0 +1,6 @@
+numpy==2.5.0
+Pillow==12.3.0
+PyQt5==5.15.11
+pyqt5_sip==12.17.1
+pywin32==311
+Send2Trash==1.8.3
