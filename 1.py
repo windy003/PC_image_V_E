@@ -148,8 +148,11 @@ def _url_to_path(url):
 
 
 def get_explorer_sort(directory):
-    """读取打开着 directory 的资源管理器窗口的排序方式。
-    返回 (kind, ascending) 或 None。kind ∈ name/date_modified/size/type/...
+    """读取打开着 directory 的资源管理器窗口的排序依据（列）。
+    返回 kind 或 None。kind ∈ name/date_modified/size/type/...
+    注意：只取"按哪一列排序"，不取升降序——本程序的编号统一按升序
+    （最旧的图片是 1，最新的是 N），这样资源管理器按时间倒序显示时，
+    点第一个（最新的）图片，编号就是 N/N。
     """
     if not _COMTYPES_OK:
         return None
@@ -180,41 +183,37 @@ def get_explorer_sort(directory):
             fv2.GetSortColumns(arr, n)
             fm = _guid_to_str(arr[0].propkey.fmtid)
             pid = arr[0].propkey.pid
-            kind = _PKEY_TO_KIND.get((fm, pid))
-            if kind is None:
-                return None
-            ascending = arr[0].direction >= 0
-            return (kind, ascending)
+            return _PKEY_TO_KIND.get((fm, pid))
     except Exception:
         return None
     return None
 
 
 def sort_image_files(all_files, directory):
-    """按资源管理器的排序方式给图片文件列表排序；读不到时按文件名自然排序。"""
-    sort_info = get_explorer_sort(directory)
-    if sort_info is None:
-        return sorted(all_files, key=_natural_name_key())
+    """按资源管理器所使用的排序列，对图片文件升序排序；
+    读不到（没装 comtypes / 没有打开对应的资源管理器窗口）时按文件名自然升序。
 
-    kind, ascending = sort_info
+    统一升序：编号 1 是最旧的图片，编号 N 是最新的图片。这样资源管理器
+    按时间倒序显示时，点列表第一个（最新的）图片，窗口标题就显示 N/N。
+    """
+    name_key = _natural_name_key()
+    kind = get_explorer_sort(directory)
+    if kind is None or kind not in ("name", "size", "type",
+                                    "date_modified", "date_created", "date_accessed"):
+        return sorted(all_files, key=name_key)
+
     if kind == "name":
-        result = sorted(all_files, key=_natural_name_key())
-    elif kind == "size":
-        result = sorted(all_files, key=lambda p: _safe_stat(p, "size"))
-    elif kind == "type":
+        return sorted(all_files, key=name_key)
+    if kind == "size":
+        # 大小相同时按文件名自然排序，保证顺序稳定
+        return sorted(all_files, key=lambda p: (_safe_stat(p, "size"), name_key(p)))
+    if kind == "type":
         # 先按扩展名，再按文件名自然排序
-        result = sorted(all_files, key=_natural_name_key())
-        result = sorted(result, key=lambda p: os.path.splitext(p)[1].lower())
-    elif kind in ("date_modified", "date_created", "date_accessed"):
-        attr = {"date_modified": "mtime", "date_created": "ctime",
-                "date_accessed": "atime"}[kind]
-        result = sorted(all_files, key=lambda p: _safe_stat(p, attr))
-    else:
-        result = sorted(all_files, key=_natural_name_key())
+        return sorted(all_files, key=lambda p: (os.path.splitext(p)[1].lower(), name_key(p)))
 
-    if not ascending:
-        result = list(reversed(result))
-    return result
+    attr = {"date_modified": "mtime", "date_created": "ctime",
+            "date_accessed": "atime"}[kind]
+    return sorted(all_files, key=lambda p: (_safe_stat(p, attr), name_key(p)))
 
 
 def _safe_stat(path, attr):

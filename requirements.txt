@@ -1,5 +1,6 @@
 numpy==2.5.0
 Pillow==12.3.0
+comtypes==1.4.17
 PyQt5==5.15.11
 pyqt5_sip==12.17.1
 pywin32==311
