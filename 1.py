@@ -16,8 +16,8 @@ import urllib.parse
 VERSION = "2025/11/9-06"
 
 # ============================================================
-# 资源管理器排序探测：读取已打开的资源管理器窗口的排序列 + 升降序，
-# 让图片左右切换的顺序与资源管理器保持一致。
+# 资源管理器排序探测：读取已打开的资源管理器窗口实际使用的排序列、
+# 升降序以及窗口中当前的显示顺序，让图片切换顺序与资源管理器一致。
 # 读不到（窗口没开 / 出错）时，回退到文件名自然排序（升序）。
 # ============================================================
 
@@ -46,7 +46,7 @@ try:
     import comtypes.client
     from comtypes import GUID, COMMETHOD, STDMETHOD, IUnknown, HRESULT
     from ctypes.wintypes import DWORD
-    from ctypes import POINTER, c_int, c_uint, byref
+    from ctypes import POINTER, c_int, c_uint, c_wchar_p, byref
 
     class _GUIDStruct(ctypes.Structure):
         _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
@@ -73,11 +73,27 @@ try:
 
     class _IFolderView(IUnknown):
         _iid_ = GUID("{cde725b0-ccc9-4519-917e-325d72fab4ce}")
-        _methods_ = [STDMETHOD(HRESULT, n, []) for n in (
-            "GetCurrentViewMode", "SetCurrentViewMode", "GetFolder", "Item",
-            "ItemCount", "Items", "GetSelectionMarkedItem", "GetFocusedItem",
-            "GetItemPosition", "GetSpacing", "GetDefaultSpacing", "GetAutoArrange",
-            "SelectItem", "SelectAndPositionItems")]
+        _methods_ = [
+            STDMETHOD(HRESULT, "GetCurrentViewMode", []),
+            STDMETHOD(HRESULT, "SetCurrentViewMode", []),
+            STDMETHOD(HRESULT, "GetFolder", []),
+            STDMETHOD(HRESULT, "Item", []),
+            STDMETHOD(HRESULT, "ItemCount", []),
+            # Items(uFlags, riid, ppv)：加上 SVGIO_FLAG_VIEWORDER 时，
+            # 返回的数组按资源管理器窗口中的显示顺序排列
+            COMMETHOD([], HRESULT, "Items",
+                      (['in'], c_uint, "uFlags"),
+                      (['in'], POINTER(GUID), "riid"),
+                      (['out'], POINTER(ctypes.c_void_p), "ppv")),
+            STDMETHOD(HRESULT, "GetSelectionMarkedItem", []),
+            STDMETHOD(HRESULT, "GetFocusedItem", []),
+            STDMETHOD(HRESULT, "GetItemPosition", []),
+            STDMETHOD(HRESULT, "GetSpacing", []),
+            STDMETHOD(HRESULT, "GetDefaultSpacing", []),
+            STDMETHOD(HRESULT, "GetAutoArrange", []),
+            STDMETHOD(HRESULT, "SelectItem", []),
+            STDMETHOD(HRESULT, "SelectAndPositionItems", []),
+        ]
 
     class _IFolderView2(_IFolderView):
         _iid_ = GUID("{1af3a467-214f-4298-908e-06b03e0b39f9}")
@@ -97,6 +113,33 @@ try:
             COMMETHOD([], HRESULT, "GetSortColumns",
                       (['in'], POINTER(_SORTCOLUMN), "rgSortColumns"),
                       (['in'], c_uint, "cColumns")),
+        ]
+
+    class _IShellItem(IUnknown):
+        _iid_ = GUID("{43826d1e-e718-42ee-bc55-a1e261c37bfe}")
+        _methods_ = [
+            STDMETHOD(HRESULT, "BindToHandler", []),
+            STDMETHOD(HRESULT, "GetParent", []),
+            COMMETHOD([], HRESULT, "GetDisplayName",
+                      (['in'], c_int, "sigdnName"),
+                      (['out'], POINTER(c_wchar_p), "ppszName")),
+            STDMETHOD(HRESULT, "GetAttributes", []),
+            STDMETHOD(HRESULT, "Compare", []),
+        ]
+
+    class _IShellItemArray(IUnknown):
+        _iid_ = GUID("{b63ea76d-1f85-456f-a19c-48159efa858b}")
+        _methods_ = [
+            STDMETHOD(HRESULT, "BindToHandler", []),
+            STDMETHOD(HRESULT, "GetPropertyStore", []),
+            STDMETHOD(HRESULT, "GetPropertyDescriptionList", []),
+            STDMETHOD(HRESULT, "GetAttributes", []),
+            COMMETHOD([], HRESULT, "GetCount",
+                      (['out'], POINTER(c_uint), "pdwNumItems")),
+            COMMETHOD([], HRESULT, "GetItemAt",
+                      (['in'], c_uint, "dwIndex"),
+                      (['out'], POINTER(POINTER(_IShellItem)), "ppsi")),
+            STDMETHOD(HRESULT, "EnumItems", []),
         ]
 
     class _IShellBrowser(IUnknown):
@@ -147,17 +190,32 @@ def _url_to_path(url):
     return None
 
 
-def get_explorer_sort(directory):
-    """读取打开着 directory 的资源管理器窗口的排序依据（列）。
-    返回 kind 或 None。kind ∈ name/date_modified/size/type/...
-    注意：只取"按哪一列排序"，不取升降序——本程序的编号统一按升序
-    （最旧的图片是 1，最新的是 N），这样资源管理器按时间倒序显示时，
-    点第一个（最新的）图片，编号就是 N/N。
+_SIGDN_FILESYSPATH = 0x80058000
+_SVGIO_ALLVIEW = 0x2
+_SVGIO_FLAG_VIEWORDER = 0x80000000
+
+
+def _norm_key(path):
+    p = os.path.normcase(os.path.normpath(path))
+    # UNC 共享根目录（\\server\share）用 dirname 取出来会带结尾反斜杠，
+    # 而资源管理器窗口的路径没有，必须去掉后再比较。
+    if len(p) > 3:
+        p = p.rstrip("\\/")
+    return p
+
+
+def _get_explorer_state(directory):
+    """读取打开着 directory 的资源管理器窗口的状态。
+
+    返回 (kind, descending, view_files)：
+      kind        排序列（name/date_modified/size/type/...），读不到为 None
+      descending  是否降序（资源管理器里的“递减”）
+      view_files  窗口中当前显示顺序的文件路径列表，读不到为 None
     """
     if not _COMTYPES_OK:
-        return None
+        return None, False, None
     try:
-        target = os.path.normcase(os.path.normpath(directory))
+        target = _norm_key(directory)
         shell = comtypes.client.CreateObject("Shell.Application")
         windows = shell.Windows()
         for i in range(windows.Count):
@@ -168,59 +226,122 @@ def get_explorer_sort(directory):
                 path = _url_to_path(w.LocationURL)
             except Exception:
                 continue
-            if not path or os.path.normcase(os.path.normpath(path)) != target:
+            if not path or _norm_key(path) != target:
                 continue
             sp = w.QueryInterface(_IServiceProvider)
             pbrowser = sp.QueryService(byref(_IShellBrowser._iid_),
                                        byref(_IShellBrowser._iid_))
             browser = ctypes.cast(pbrowser, POINTER(_IShellBrowser))
             shellview = browser.QueryActiveShellView()
-            fv2 = shellview.QueryInterface(_IFolderView2)
-            n = fv2.GetSortColumnCount()
-            if n <= 0:
-                return None
-            arr = (_SORTCOLUMN * n)()
-            fv2.GetSortColumns(arr, n)
-            fm = _guid_to_str(arr[0].propkey.fmtid)
-            pid = arr[0].propkey.pid
-            return _PKEY_TO_KIND.get((fm, pid))
+
+            kind, descending = _read_sort_columns(shellview)
+            view_files = _read_view_order(shellview)
+            return kind, descending, view_files
+    except Exception:
+        return None, False, None
+    return None, False, None
+
+
+def _read_sort_columns(shellview):
+    """读取窗口的排序列和升降序。"""
+    try:
+        fv2 = shellview.QueryInterface(_IFolderView2)
+        n = fv2.GetSortColumnCount()
+        if n <= 0:
+            return None, False
+        arr = (_SORTCOLUMN * n)()
+        fv2.GetSortColumns(arr, n)
+        fm = _guid_to_str(arr[0].propkey.fmtid)
+        pid = arr[0].propkey.pid
+        return _PKEY_TO_KIND.get((fm, pid)), arr[0].direction < 0
+    except Exception:
+        return None, False
+
+
+def _read_view_order(shellview):
+    """读取窗口里各条目当前从上到下的显示顺序（包含文件夹）。"""
+    try:
+        fv = shellview.QueryInterface(_IFolderView)
+        parray = fv.Items(_SVGIO_ALLVIEW | _SVGIO_FLAG_VIEWORDER,
+                          byref(_IShellItemArray._iid_))
+        if not parray:
+            return None
+        arr = ctypes.cast(parray, POINTER(_IShellItemArray))
+        files = []
+        for j in range(arr.GetCount()):
+            item = arr.GetItemAt(j)
+            if item is None:
+                continue
+            try:
+                path = item.GetDisplayName(_SIGDN_FILESYSPATH)
+            except Exception:
+                continue      # 非文件系统条目（如“此电脑”）没有路径
+            if path:
+                files.append(os.path.normpath(path))
+        return files
     except Exception:
         return None
-    return None
+
+
+def _sort_by_explorer_column(all_files, kind, descending):
+    """按资源管理器的排序列排序；kind 为 None 时按文件名自然升序。
+
+    先按文件名自然升序排好，作为稳定的次级次序——资源管理器在
+    排序列取值相同时，也是按名称升序排列。
+    """
+    name_key = _natural_name_key()
+    ordered = sorted(all_files, key=name_key)
+    if kind not in ("name", "size", "type",
+                    "date_modified", "date_created", "date_accessed"):
+        return ordered
+    if kind == "name":
+        return list(reversed(ordered)) if descending else ordered
+    if kind == "size":
+        key = lambda p: _safe_stat(p, "size")
+    elif kind == "type":
+        key = lambda p: os.path.splitext(p)[1].lower()
+    else:
+        attr = {"date_modified": "mtime", "date_created": "ctime",
+                "date_accessed": "atime"}[kind]
+        key = lambda p: _safe_stat(p, attr)
+    ordered.sort(key=key, reverse=descending)   # 稳定排序保留名称次序
+    return ordered
 
 
 def sort_image_files(all_files, directory):
-    """按资源管理器所使用的排序列，对图片文件升序排序；
-    读不到（没装 comtypes / 没有打开对应的资源管理器窗口）时按文件名自然升序。
+    """按资源管理器中的实际情况排序图片文件。
 
-    统一升序：编号 1 是最旧的图片，编号 N 是最新的图片。这样资源管理器
-    按时间倒序显示时，点列表第一个（最新的）图片，窗口标题就显示 N/N。
+    优先使用资源管理器窗口中当前的显示顺序（升序/降序、分组以及并列时
+    资源管理器自己的次级排序都已包含在内），这样点开窗口里的第一张图片，
+    本程序显示的编号就是 1/N；窗口里还没刷新出来的文件，按排序列和
+    升降序补在末尾；没有打开对应的资源管理器窗口时，按文件名自然升序。
     """
-    name_key = _natural_name_key()
-    kind = get_explorer_sort(directory)
-    if kind is None or kind not in ("name", "size", "type",
-                                    "date_modified", "date_created", "date_accessed"):
-        return sorted(all_files, key=name_key)
+    kind, descending, view_files = _get_explorer_state(directory)
 
-    if kind == "name":
-        return sorted(all_files, key=name_key)
-    if kind == "size":
-        # 大小相同时按文件名自然排序，保证顺序稳定
-        return sorted(all_files, key=lambda p: (_safe_stat(p, "size"), name_key(p)))
-    if kind == "type":
-        # 先按扩展名，再按文件名自然排序
-        return sorted(all_files, key=lambda p: (os.path.splitext(p)[1].lower(), name_key(p)))
+    if view_files:
+        by_key = {_norm_key(p): p for p in all_files}
+        result = []
+        seen = set()
+        for path in view_files:
+            key = _norm_key(path)
+            real = by_key.get(key)
+            if real is not None and key not in seen:
+                seen.add(key)
+                result.append(real)
+        missing = [p for p in all_files if _norm_key(p) not in seen]
+        if missing:
+            result.extend(_sort_by_explorer_column(missing, kind, descending))
+        return result
 
-    attr = {"date_modified": "mtime", "date_created": "ctime",
-            "date_accessed": "atime"}[kind]
-    return sorted(all_files, key=lambda p: (_safe_stat(p, attr), name_key(p)))
+    return _sort_by_explorer_column(all_files, kind, descending)
 
 
 def _safe_stat(path, attr):
     try:
         st = os.stat(path)
-        return {"size": st.st_size, "mtime": st.st_mtime,
-                "ctime": st.st_ctime, "atime": st.st_atime}[attr]
+        # 日期用纳秒值，和资源管理器的排序精度保持一致
+        return {"size": st.st_size, "mtime": st.st_mtime_ns,
+                "ctime": st.st_ctime_ns, "atime": st.st_atime_ns}[attr]
     except Exception:
         return 0
 
@@ -1037,7 +1158,7 @@ class ImageViewer(QMainWindow):
                     if os.path.exists(full_path) and os.path.isfile(full_path):
                         all_files.append(full_path)
 
-            # 按资源管理器的排序方式排序（读不到则按文件名自然排序）
+            # 按资源管理器中的实际顺序排序（升/降序都跟随；读不到则按文件名自然升序）
             self.image_list = sort_image_files(all_files, directory)
             self._listed_dir = directory
 
